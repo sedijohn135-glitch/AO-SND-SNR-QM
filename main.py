@@ -23,6 +23,7 @@ import asyncio  # noqa: E402
 import logging  # noqa: E402
 import signal  # noqa: E402
 import sys  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
 
 from twisted.internet import reactor  # noqa: E402
 
@@ -31,7 +32,8 @@ from bot.ctrader.client import CTraderClient  # noqa: E402
 from bot.ctrader.symbols import SymbolResolver  # noqa: E402
 from bot.ctrader.trendbars import drop_forming_bar, fetch_trendbars  # noqa: E402
 from bot.execution import Broker  # noqa: E402
-from bot.report import render  # noqa: E402
+from bot.news import NewsFilter  # noqa: E402
+from bot.report import render, render_blackout  # noqa: E402
 from bot.scheduler import SymbolSchedule  # noqa: E402
 from bot.strategy.engine import MarketFrames, StrategyEngine  # noqa: E402
 from bot.strategy.quasimodo import is_invalidated  # noqa: E402
@@ -58,6 +60,18 @@ class TradingBot:
         self._client = CTraderClient(config)
         self._resolver = SymbolResolver(self._client, config.account_id)
         self._broker = Broker(self._client, config.account_id)
+        self._news = NewsFilter(
+            enabled=config.news_filter_enabled,
+            feed_url=config.news_feed_url,
+            currencies=config.news_currencies,
+            min_impact=config.news_min_impact,
+            before_minutes=config.news_before_minutes,
+            after_minutes=config.news_after_minutes,
+            refresh_minutes=config.news_refresh_minutes,
+            cache_max_age_hours=config.news_cache_max_age_hours,
+            request_timeout=config.news_request_timeout,
+            block_all_day=config.news_block_all_day,
+        )
         self._schedule = SymbolSchedule(
             primary_symbol=config.symbol_weekday,
             fallback_symbol=config.symbol_weekend,
@@ -119,6 +133,17 @@ class TradingBot:
             await self._handle_switch(switch.previous)
 
         symbol = await self._resolver.get(symbol_name)
+
+        # Macroeconomic news gate. Runs before any analysis: a blackout has to
+        # pull resting orders whether or not a setup exists, and skipping the
+        # trendbar fetch saves the API round trips too.
+        await self._news.ensure_fresh()
+        gate = self._news.check()
+        if gate.blocked:
+            await self._handle_news_blackout(symbol, gate)
+            return
+        log.debug("News filter: %s", gate.reason)
+
         await self._broker.subscribe_spots(symbol.symbol_id)
 
         frames = await self._fetch_frames(symbol.symbol_id)
@@ -189,6 +214,29 @@ class TradingBot:
             m15=drop_forming_bar(m15, "M15"),
             m5=drop_forming_bar(m5, "M5"),
         )
+
+    async def _handle_news_blackout(self, symbol, gate) -> None:
+        """Suppress entries and pull resting orders around a release.
+
+        Open positions are deliberately left alone: their stop loss already
+        caps the risk, and closing them early would abandon the risk/reward
+        the setup was sized for.
+        """
+        print(
+            render_blackout(symbol.name, datetime.now(timezone.utc), gate),
+            flush=True,
+        )
+        self._active_patterns.pop(symbol.symbol_id, None)
+
+        if not self._config.enable_trading:
+            return
+
+        cancelled = await self._broker.cancel_pending_for_symbol(symbol.symbol_id)
+        if cancelled:
+            log.warning(
+                "News blackout: cancelled %d pending order(s) on %s",
+                cancelled, symbol.name,
+            )
 
     async def _handle_switch(self, previous_symbol: str) -> None:
         """Clean up after the outgoing instrument before trading the new one."""

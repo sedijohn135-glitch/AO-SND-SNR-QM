@@ -18,6 +18,10 @@ def env(monkeypatch):
         "CTRADER_REFRESH_TOKEN", "LOOP_INTERVAL_SECONDS",
         "GOLD_SESSION_TIMEZONE", "GOLD_SESSION_OPEN", "GOLD_SESSION_CLOSE",
         "REQUIRE_H4_ZONE_PROXIMITY", "H4_ZONE_PROXIMITY_ATR",
+        "NEWS_FILTER_ENABLED", "NEWS_FEED_URL", "NEWS_CURRENCIES",
+        "NEWS_MIN_IMPACT", "NEWS_BLACKOUT_BEFORE_MINUTES",
+        "NEWS_BLACKOUT_AFTER_MINUTES", "NEWS_REFRESH_MINUTES",
+        "NEWS_CACHE_MAX_AGE_HOURS", "NEWS_BLOCK_ALL_DAY_EVENTS",
     ]:
         monkeypatch.delenv(key, raising=False)
     for key, value in BASE_ENV.items():
@@ -127,3 +131,50 @@ def test_h4_zone_proximity_can_be_disabled(env):
 
 def test_session_appears_in_redacted_snapshot(env):
     assert "SUN 18:00" in str(load_config().redacted()["session"])
+
+
+# -- news filter -------------------------------------------------------------
+
+def test_news_filter_defaults(env):
+    config = load_config()
+    assert config.news_filter_enabled is True
+    assert config.news_currencies == ("USD",)
+    assert config.news_min_impact == "High"
+    assert config.news_before_minutes == 30
+    assert config.news_after_minutes == 30
+    assert config.news_cache_max_age_hours == 24
+
+
+def test_news_currencies_parse_as_a_list(env):
+    env.setenv("NEWS_CURRENCIES", "usd, eur , gbp")
+    assert load_config().news_currencies == ("USD", "EUR", "GBP")
+
+
+def test_empty_news_currencies_is_rejected(env):
+    env.setenv("NEWS_CURRENCIES", " , ")
+    with pytest.raises(ConfigError, match="NEWS_CURRENCIES"):
+        load_config()
+
+
+def test_news_windows_are_configurable(env):
+    env.setenv("NEWS_BLACKOUT_BEFORE_MINUTES", "45")
+    env.setenv("NEWS_BLACKOUT_AFTER_MINUTES", "15")
+    config = load_config()
+    assert (config.news_before_minutes, config.news_after_minutes) == (45, 15)
+
+
+def test_refresh_interval_has_a_floor(env):
+    """The feed allows 2 downloads per 5 minutes; never poll faster than 5."""
+    env.setenv("NEWS_REFRESH_MINUTES", "1")
+    assert load_config().news_refresh_minutes == 5
+
+
+def test_news_filter_can_be_disabled(env):
+    env.setenv("NEWS_FILTER_ENABLED", "false")
+    assert load_config().news_filter_enabled is False
+
+
+def test_news_settings_appear_in_redacted_snapshot(env):
+    redacted = load_config().redacted()
+    assert redacted["news_filter_enabled"] is True
+    assert redacted["news_window_minutes"] == "-30/+30"
