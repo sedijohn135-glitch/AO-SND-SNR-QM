@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import load_dotenv
 
+from bot.news import DEFAULT_FEED_URL
 from bot.session import (
     DEFAULT_GOLD_SESSION_CLOSE,
     DEFAULT_GOLD_SESSION_OPEN,
@@ -114,6 +115,18 @@ class Config:
     require_h4_zone_proximity: bool = True
     h4_zone_proximity_atr: float = 1.5
 
+    # --- news filter -------------------------------------------------------
+    news_filter_enabled: bool = True
+    news_feed_url: str = DEFAULT_FEED_URL
+    news_currencies: tuple[str, ...] = ("USD",)
+    news_min_impact: str = "High"
+    news_before_minutes: int = 30
+    news_after_minutes: int = 30
+    news_refresh_minutes: int = 60
+    news_cache_max_age_hours: int = 24
+    news_request_timeout: float = 15.0
+    news_block_all_day: bool = False
+
     log_level: str = "INFO"
 
     @property
@@ -138,6 +151,12 @@ class Config:
             "timezone": str(self.timezone),
             "session": self.session.describe() if self.session else None,
             "require_h4_zone_proximity": self.require_h4_zone_proximity,
+            "news_filter_enabled": self.news_filter_enabled,
+            "news_currencies": list(self.news_currencies),
+            "news_min_impact": self.news_min_impact,
+            "news_window_minutes": (
+                f"-{self.news_before_minutes}/+{self.news_after_minutes}"
+            ),
             "loop_interval_seconds": self.loop_interval_seconds,
             "risk_percent": self.risk_percent,
             "fixed_volume_lots": self.fixed_volume_lots,
@@ -181,6 +200,13 @@ def load_config() -> Config:
     except SessionError as exc:
         raise ConfigError(str(exc)) from exc
 
+    raw_currencies = _raw("NEWS_CURRENCIES", "USD") or "USD"
+    news_currencies = tuple(
+        part.strip().upper() for part in raw_currencies.split(",") if part.strip()
+    )
+    if not news_currencies:
+        raise ConfigError("NEWS_CURRENCIES must list at least one currency code.")
+
     config = Config(
         app_id=_required("CTRADER_APP_ID"),
         app_secret=_required("CTRADER_APP_SECRET"),
@@ -204,6 +230,16 @@ def load_config() -> Config:
         enable_trading=_bool("ENABLE_TRADING", False),
         require_h4_zone_proximity=_bool("REQUIRE_H4_ZONE_PROXIMITY", True),
         h4_zone_proximity_atr=_float("H4_ZONE_PROXIMITY_ATR", 1.5),
+        news_filter_enabled=_bool("NEWS_FILTER_ENABLED", True),
+        news_feed_url=_raw("NEWS_FEED_URL", DEFAULT_FEED_URL) or DEFAULT_FEED_URL,
+        news_currencies=news_currencies,
+        news_min_impact=(_raw("NEWS_MIN_IMPACT", "High") or "High").capitalize(),
+        news_before_minutes=max(0, _int("NEWS_BLACKOUT_BEFORE_MINUTES", 30)),
+        news_after_minutes=max(0, _int("NEWS_BLACKOUT_AFTER_MINUTES", 30)),
+        news_refresh_minutes=max(5, _int("NEWS_REFRESH_MINUTES", 60)),
+        news_cache_max_age_hours=max(1, _int("NEWS_CACHE_MAX_AGE_HOURS", 24)),
+        news_request_timeout=_float("NEWS_REQUEST_TIMEOUT", 15.0),
+        news_block_all_day=_bool("NEWS_BLOCK_ALL_DAY_EVENTS", False),
         log_level=(_raw("LOG_LEVEL", "INFO") or "INFO").upper(),
     )
     return config

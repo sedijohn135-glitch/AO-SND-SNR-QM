@@ -1,8 +1,10 @@
 name: CI
 
 on:
+  # Pull requests already cover feature branches; limiting push to main stops
+  # every PR commit running the same job twice.
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
 
 # A new push to the same branch supersedes the previous run.

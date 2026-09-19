@@ -33,6 +33,7 @@ the full pattern-recognition pipeline, risk and execution are all implemented.
 | **HAPI 5** — SNR level clustering | `bot/strategy/snr.py` |
 | **HAPI 6** — stop loss / take profit / sizing | `bot/risk.py` |
 | Pipeline orchestration | `bot/strategy/engine.py` |
+| Macroeconomic news filter | `bot/news.py` |
 | Order placement + cancellation | `bot/execution.py` |
 | Five-point analysis report | `bot/report.py` |
 
@@ -110,6 +111,74 @@ resolver tolerates broker naming variants — `XAUUSD`, `XAU/USD`, `GOLD`,
 
 ---
 
+## Macroeconomic news filter
+
+High-impact releases (NFP, CPI, FOMC) blow spreads out and gap price straight
+through resting limit orders. Within **30 minutes either side** of a
+high-impact **USD** event the bot suppresses new entries and cancels any
+pending limit order on the active instrument.
+
+**Open positions are deliberately left alone.** Their stop loss already caps
+the risk, and closing them early would abandon the risk/reward the setup was
+sized for.
+
+```
+====================================================================
+ XAUUSD | 2026-09-18 12:20:00 UTC
+====================================================================
+
+   TRADING BLOCKED - MACROECONOMIC NEWS FILTER
+
+   News blackout: High USD Non-Farm Employment Change at 2026-09-18 12:30 UTC
+   | window 12:00-13:00 UTC | 40 min remaining
+
+   Event       : Non-Farm Employment Change
+   Currency    : USD
+   Impact      : High
+   Release     : 2026-09-18 12:30 UTC
+   Window      : 12:00 -> 13:00 UTC
+
+   New entries suppressed; pending limit orders cancelled.
+   Open positions are left alone - their stop loss still applies.
+====================================================================
+```
+
+### Three constraints shaped the implementation
+
+**The feed is rate limited** — Forex Factory allows two downloads per five
+minutes. The loop ticks every 60s, so fetching per tick would get us blocked
+within minutes. The calendar is cached and refreshed at most once per
+`NEWS_REFRESH_MINUTES` (default 60, floor 5). Calendars are published days
+ahead, so an hour-old copy is no worse than a fresh one. Fetch failures back
+off exponentially from 5 up to 60 minutes.
+
+**Only `thisweek` is fetched.** A ±30 minute window never needs more than the
+current week, and one URL instead of two halves the request rate. The single
+gap — a cache fetched late on Sunday not covering Monday — is closed by
+treating a cache from a different ISO week as stale.
+
+**No new dependency.** Fetching uses stdlib `urllib` on a worker thread via
+`asyncio.to_thread`, so nothing blocks the Twisted reactor and the Railway
+build gains no package that could conflict with the pinned TLS stack.
+
+### Fail-safe behaviour
+
+If the feed cannot be read, the bot keeps trading on the last good calendar
+while it is younger than `NEWS_CACHE_MAX_AGE_HOURS` (default 24h). With no
+usable copy at all it **fails closed** and blocks new entries — better to miss
+a trade than to trade blind into NFP.
+
+Parsing is deliberately forgiving: a malformed entry is logged and skipped
+rather than taking the trading loop down. All-day and tentative entries are
+published at local midnight with no real release time, so a ±30 minute window
+around them is meaningless — they are skipped unless
+`NEWS_BLOCK_ALL_DAY_EVENTS=true`.
+
+> The calendar feed is a third-party, unversioned export. The parser tolerates
+> surprises, but if Forex Factory changes the schema the filter will start
+> failing closed rather than silently letting trades through — watch the
+> `bot.news` log lines after deploying.
+
 ## Setup
 
 ### 1. Get cTrader Open API credentials
@@ -146,6 +215,15 @@ cp .env.example .env
 | `GOLD_SESSION_CLOSE` | no | `FRI 17:00` | Session close, in the market zone |
 | `REQUIRE_H4_ZONE_PROXIMITY` | no | `true` | Require price to be at the H4 zone (HAPI 1) |
 | `H4_ZONE_PROXIMITY_ATR` | no | `1.5` | How near "at the zone" means, in H4 ATRs |
+| `NEWS_FILTER_ENABLED` | no | `true` | Master switch for the news filter |
+| `NEWS_FEED_URL` | no | Forex Factory weekly JSON | Calendar source |
+| `NEWS_CURRENCIES` | no | `USD` | Comma-separated codes to watch |
+| `NEWS_MIN_IMPACT` | no | `High` | `High` / `Medium` / `Low` |
+| `NEWS_BLACKOUT_BEFORE_MINUTES` | no | `30` | Blackout starts this long before |
+| `NEWS_BLACKOUT_AFTER_MINUTES` | no | `30` | Blackout ends this long after |
+| `NEWS_REFRESH_MINUTES` | no | `60` | Calendar refresh interval (floor 5) |
+| `NEWS_CACHE_MAX_AGE_HOURS` | no | `24` | Past this, a stale cache fails closed |
+| `NEWS_BLOCK_ALL_DAY_EVENTS` | no | `false` | Block on undated all-day entries |
 | `LOOP_INTERVAL_SECONDS` | no | `60` | Seconds between analysis passes |
 | `BARS_H4` / `BARS_M15` / `BARS_M5` | no | `400`/`500`/`500` | Candles per timeframe |
 | `RISK_PERCENT` | no | `0.5` | Percent of balance risked per trade |
@@ -164,7 +242,7 @@ Credentials are only ever read from the environment. `.env` is gitignored and
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
-pytest                 # 164 tests, no network needed
+pytest                 # 225 tests, no network needed
 python -u main.py
 ```
 
@@ -205,6 +283,7 @@ bot/
   reactor_setup.py          installs the asyncio Twisted reactor (import first!)
   config.py                 environment parsing + validation
   session.py                DST-aware market session windows
+  news.py                   macroeconomic news blackout filter
   scheduler.py              XAUUSD while Gold is open / BTCUSD while it is shut
   indicators.py             Awesome Oscillator, ATR
   risk.py                   stop loss, take profit, position sizing
@@ -255,7 +334,7 @@ a regression here fails the build rather than the deploy.
 ## Tests
 
 ```bash
-pytest -q     # 164 tests
+pytest -q     # 225 tests
 ruff check .  # lint
 ```
 
@@ -276,6 +355,11 @@ No network access required. Coverage includes:
   divergence and the momentum-confirmed case that must *not* fire; the QM
   four-pivot shape, entry at the shoulder, the 36-bar age limit and
   invalidation;
+- **News filter** — window boundaries at exactly ±30 minutes, USD/High
+  filtering (a High EUR event and a Medium USD event must *not* block),
+  all-day entries skipped, malformed entries survived, the fail-closed and
+  stale-cache paths, and that backoff stops a rate-limited feed being hammered.
+  The fetcher is injected, so no test touches the network;
 - **Risk** — the full chain, the R:R floor and volume-step snapping;
 - **Pipeline** — an aligned market producing a complete priced setup, plus each
   gate standing the bot down, and a random-walk smoke test.

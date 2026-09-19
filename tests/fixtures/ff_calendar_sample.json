@@ -1,0 +1,62 @@
+[
+  {
+    "title": "FOMC Statement",
+    "country": "USD",
+    "date": "2026-09-16T14:00:00-04:00",
+    "impact": "High",
+    "forecast": "",
+    "previous": ""
+  },
+  {
+    "title": "Core Retail Sales m/m",
+    "country": "USD",
+    "date": "2026-09-17T08:30:00-04:00",
+    "impact": "Medium",
+    "forecast": "0.3%",
+    "previous": "0.1%"
+  },
+  {
+    "title": "ECB Press Conference",
+    "country": "EUR",
+    "date": "2026-09-17T08:45:00-04:00",
+    "impact": "High",
+    "forecast": "",
+    "previous": ""
+  },
+  {
+    "title": "Non-Farm Employment Change",
+    "country": "USD",
+    "date": "2026-09-18T08:30:00-04:00",
+    "impact": "High",
+    "forecast": "168K",
+    "previous": "142K"
+  },
+  {
+    "title": "Crude Oil Inventories",
+    "country": "USD",
+    "date": "2026-09-18T10:30:00-04:00",
+    "impact": "Low",
+    "forecast": "-1.2M",
+    "previous": "0.6M"
+  },
+  {
+    "title": "Bank Holiday",
+    "country": "USD",
+    "date": "2026-09-19T00:00:00-04:00",
+    "impact": "High",
+    "forecast": "",
+    "previous": ""
+  },
+  {
+    "title": "Entry with no date",
+    "country": "USD",
+    "impact": "High"
+  },
+  {
+    "title": "Entry with an unparseable date",
+    "country": "USD",
+    "date": "next tuesday-ish",
+    "impact": "High"
+  },
+  "a bare string that is not an object"
+]

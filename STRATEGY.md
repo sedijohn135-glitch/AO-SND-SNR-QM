@@ -159,6 +159,33 @@ for a second target.
 
 ---
 
+## Macroeconomic news filter
+
+A pre-flight gate that runs before HAPI 1, ahead of any analysis — a blackout
+has to pull resting orders whether or not a setup exists.
+
+| Rule | Value |
+| --- | --- |
+| Source | Forex Factory weekly JSON (`ff_calendar_thisweek.json`) |
+| Watched | `country == "USD"`, `impact == "High"` (both configurable) |
+| Blackout window | event time −30 min to +30 min |
+| On blackout | suppress new entries **and** cancel pending limit orders |
+| Open positions | **left alone** — the stop loss already caps the risk |
+
+Applies to XAUUSD and BTCUSD alike: a USD release moves both.
+
+**Fail-safe.** The feed is rate limited to two downloads per five minutes, so
+the calendar is cached and refreshed at most hourly, with exponential backoff
+on failure. If it cannot be read, the bot trades on the last good copy while it
+is under 24h old; with no usable copy at all it blocks new entries. Better to
+miss a trade than to trade blind into NFP.
+
+All-day and tentative entries are published at local midnight with no real
+release time, so a ±30 minute window around them is meaningless — they are
+skipped by default.
+
+Module: `bot/news.py`, gate in `main._tick`.
+
 ## Instrument calendar
 
 The switch happens on **session boundaries**, not midnight:
@@ -190,6 +217,9 @@ the book all weekend. Modules: `bot/scheduler.py`, `bot/session.py`.
 ## Execution order of gates
 
 ```
+News blackout active?                yes ──► cancel pendings, skip the tick
+   │                                         (open positions untouched)
+   ▼
 H4 bias ──► direction permitted?      no ──► stand down
    │
    ▼

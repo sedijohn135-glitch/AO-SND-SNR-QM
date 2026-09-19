@@ -91,3 +91,44 @@ def render(report: AnalysisReport) -> str:
 
     lines.append("=" * 68)
     return "\n".join(lines)
+
+
+def render_blackout(symbol: str, moment, gate) -> str:
+    """Compact banner for a tick skipped by the news filter.
+
+    Deliberately not the five-point report: no analysis ran, so printing one
+    would claim work that did not happen.
+    """
+    lines = [
+        "=" * 68,
+        f" {symbol} | {moment:%Y-%m-%d %H:%M:%S} UTC",
+        "=" * 68,
+        "",
+        "   TRADING BLOCKED - MACROECONOMIC NEWS FILTER",
+        "",
+        f"   {gate.reason}",
+    ]
+    if gate.blackout is not None:
+        event = gate.blackout.event
+        lines.extend([
+            "",
+            f"   Event       : {event.title}",
+            f"   Currency    : {event.currency}",
+            f"   Impact      : {event.impact}",
+            f"   Release     : {event.time:%Y-%m-%d %H:%M} UTC",
+            f"   Window      : {gate.blackout.starts_at:%H:%M}"
+            f" -> {gate.blackout.ends_at:%H:%M} UTC",
+        ])
+    if gate.fail_closed:
+        lines.extend([
+            "",
+            "   No usable calendar - failing closed. Entries are blocked until",
+            "   the feed recovers. Set NEWS_FILTER_ENABLED=false to override.",
+        ])
+    lines.extend([
+        "",
+        "   New entries suppressed; pending limit orders cancelled.",
+        "   Open positions are left alone - their stop loss still applies.",
+        "=" * 68,
+    ])
+    return "\n".join(lines)
