@@ -1,0 +1,21 @@
+# --- cTrader Open API transport -------------------------------------------
+# Twisted-based protobuf client maintained by Spotware.
+ctrader-open-api==0.9.2
+protobuf==3.20.1
+Twisted==24.3.0
+
+# TLS for the Twisted SSL endpoint (live.ctraderapi.com:5035).
+# pyOpenSSL and cryptography MUST stay compatible: an older pyOpenSSL against a
+# modern cryptography aborts at import with
+#   AttributeError: module 'lib' has no attribute 'GEN_EMAIL'
+pyOpenSSL==26.4.0
+cryptography==50.0.1
+# Without service-identity Twisted only does rudimentary hostname verification.
+service-identity==26.1.0
+
+# --- Analysis --------------------------------------------------------------
+pandas==3.0.6
+numpy==2.4.6
+
+# --- Config ----------------------------------------------------------------
+python-dotenv==1.2.3
