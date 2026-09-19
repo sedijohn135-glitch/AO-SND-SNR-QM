@@ -196,6 +196,36 @@ both XAUUSD and BTCUSD.
 | `NEWS_REQUEST_TIMEOUT` | `15` | Seconds |
 | `NEWS_BLOCK_ALL_DAY_EVENTS` | `false` | Block on undated all-day entries |
 
+### Telegram notifications (optional)
+
+Leave the token or the chat id blank and notifications are simply off — the bot
+logs `Telegram notifications: inactive (missing ...)` and trades normally.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `TELEGRAM_BOT_TOKEN` | *(unset)* | From [@BotFather](https://t.me/BotFather) |
+| `TELEGRAM_CHAT_ID` | *(unset)* | Target chat; negative for groups |
+| `TELEGRAM_ENABLED` | `true` | Silence notifications without removing credentials |
+| `TELEGRAM_TIMEOUT` | `10` | Seconds per request |
+
+**Getting the two values:**
+
+1. Message [@BotFather](https://t.me/BotFather) → `/newbot` → copy the token
+   into `TELEGRAM_BOT_TOKEN`.
+2. Send your new bot any message (a bot cannot start a conversation with you),
+   then open:
+
+   ```
+   https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates
+   ```
+
+   Read `result[0].message.chat.id` — that is `TELEGRAM_CHAT_ID`. For a group,
+   add the bot to it, post a message there, and use the group's negative id.
+
+You should get a **BOT STARTED** message within seconds of the next deploy. If
+nothing arrives, check the logs for `Telegram send failed` — the token itself
+is never logged, so the endpoint appears redacted as `bot***`.
+
 ### Logging
 
 | Variable | Default | Description |
@@ -233,6 +263,9 @@ Then the five-point report, once per `LOOP_INTERVAL_SECONDS`.
    before deployment, because the build environment could not reach the feed.
    If you instead see `News calendar fetch failed`, see below.
 4. **The report's `1. H4 TREND` line** — proves real candles came back.
+
+If Telegram is configured you should also see `Telegram notifications: active`
+and receive a **BOT STARTED** message.
 
 ## 8. Going live
 

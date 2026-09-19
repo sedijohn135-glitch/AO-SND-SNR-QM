@@ -31,15 +31,27 @@ from bot.config import Config, ConfigError, load_config  # noqa: E402
 from bot.ctrader.client import CTraderClient  # noqa: E402
 from bot.ctrader.symbols import SymbolResolver  # noqa: E402
 from bot.ctrader.trendbars import drop_forming_bar, fetch_trendbars  # noqa: E402
+from ctrader_open_api.messages.OpenApiMessages_pb2 import (  # noqa: E402
+    ProtoOAExecutionEvent,
+)
+
 from bot.execution import Broker  # noqa: E402
 from bot.news import NewsFilter  # noqa: E402
+from bot.notifications import TradeNotifier  # noqa: E402
 from bot.report import render, render_blackout  # noqa: E402
 from bot.scheduler import SymbolSchedule  # noqa: E402
 from bot.strategy.engine import MarketFrames, StrategyEngine  # noqa: E402
 from bot.strategy.quasimodo import is_invalidated  # noqa: E402
 from bot.strategy.types import QMPattern, SetupStatus  # noqa: E402
+from bot.telegram import TelegramNotifier  # noqa: E402
 
 log = logging.getLogger("bot")
+
+EXECUTION_EVENT_PAYLOAD_TYPE = ProtoOAExecutionEvent().payloadType
+
+
+def _first_line(text: str) -> str:
+    return (text or "").splitlines()[0].strip() if text else ""
 
 
 def configure_logging(level: str) -> None:
@@ -72,6 +84,25 @@ class TradingBot:
             request_timeout=config.news_request_timeout,
             block_all_day=config.news_block_all_day,
         )
+        self._telegram = TelegramNotifier(
+            token=config.telegram_bot_token,
+            chat_id=config.telegram_chat_id,
+            enabled=config.telegram_enabled,
+            timeout=config.telegram_timeout,
+        )
+        self._trade_notifier = TradeNotifier(
+            notifier=self._telegram,
+            symbol_lookup=self._resolver.by_id,
+            # Twisted callbacks run on the reactor's loop; bind it explicitly
+            # rather than relying on get_event_loop() at dispatch time.
+            loop=asyncio.get_running_loop(),
+        )
+        # Fills, closes and cancellations all happen broker-side; they reach us
+        # only as execution events.
+        self._client.add_event_handler(
+            EXECUTION_EVENT_PAYLOAD_TYPE,
+            self._trade_notifier.handle_execution_event,
+        )
         self._schedule = SymbolSchedule(
             primary_symbol=config.symbol_weekday,
             fallback_symbol=config.symbol_weekend,
@@ -87,11 +118,27 @@ class TradingBot:
         log.info("Starting bot with config: %s", self._config.redacted())
         if not self._config.enable_trading:
             log.warning("ENABLE_TRADING=false -- analysis only, no orders will be sent")
+        log.info("Telegram notifications: %s", self._telegram.describe())
 
         self._task = asyncio.current_task()
         await self._client.start()
         self._running = True
+        await self._announce_start()
         await self._run_loop()
+
+    async def _announce_start(self) -> None:
+        """One message on startup, so silence later is unambiguous."""
+        if not self._telegram.configured:
+            return
+        mode = "LIVE" if self._config.host_type == "live" else "DEMO"
+        trading = "ENABLED" if self._config.enable_trading else "analysis only"
+        await self._telegram.send(
+            "\U0001f916 <b>BOT STARTED</b>\n\n"
+            f"Account: <b>{mode}</b> {self._config.account_id}\n"
+            f"Trading: <b>{trading}</b>\n"
+            f"Risk:    <code>{self._config.risk_percent}%</code> per trade\n"
+            f"News filter: {'on' if self._config.news_filter_enabled else 'off'}"
+        )
 
     def request_stop(self) -> None:
         """Stop promptly, even from inside a blocking await.
@@ -231,6 +278,9 @@ class TradingBot:
         if not self._config.enable_trading:
             return
 
+        self._trade_notifier.note_cancel_reason(
+            symbol.symbol_id, _first_line(gate.reason) or "News blackout"
+        )
         cancelled = await self._broker.cancel_pending_for_symbol(symbol.symbol_id)
         if cancelled:
             log.warning(
@@ -250,6 +300,9 @@ class TradingBot:
         if not self._config.enable_trading:
             return
 
+        self._trade_notifier.note_cancel_reason(
+            outgoing.symbol_id, f"Instrument handover away from {previous_symbol}"
+        )
         cancelled = await self._broker.cancel_pending_for_symbol(outgoing.symbol_id)
         if cancelled:
             log.info("Handover: cancelled %d pending order(s) on %s",
@@ -271,6 +324,11 @@ class TradingBot:
         )
         self._active_patterns.pop(symbol.symbol_id, None)
         if self._config.enable_trading:
+            self._trade_notifier.note_cancel_reason(
+                symbol.symbol_id,
+                f"QM invalidated - a candle closed beyond the head "
+                f"({pattern.head.price:g})",
+            )
             await self._broker.cancel_pending_for_symbol(symbol.symbol_id)
 
     def _within_exposure_limits(self, snapshot, symbol_id: int) -> bool:

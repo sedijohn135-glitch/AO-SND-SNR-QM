@@ -34,6 +34,7 @@ the full pattern-recognition pipeline, risk and execution are all implemented.
 | **HAPI 6** — stop loss / take profit / sizing | `bot/risk.py` |
 | Pipeline orchestration | `bot/strategy/engine.py` |
 | Macroeconomic news filter | `bot/news.py` |
+| Telegram notifications | `bot/telegram.py`, `bot/notifications.py` |
 | Order placement + cancellation | `bot/execution.py` |
 | Five-point analysis report | `bot/report.py` |
 
@@ -224,6 +225,10 @@ cp .env.example .env
 | `NEWS_REFRESH_MINUTES` | no | `60` | Calendar refresh interval (floor 5) |
 | `NEWS_CACHE_MAX_AGE_HOURS` | no | `24` | Past this, a stale cache fails closed |
 | `NEWS_BLOCK_ALL_DAY_EVENTS` | no | `false` | Block on undated all-day entries |
+| `TELEGRAM_BOT_TOKEN` | no | *(unset)* | Blank disables notifications |
+| `TELEGRAM_CHAT_ID` | no | *(unset)* | Blank disables notifications |
+| `TELEGRAM_ENABLED` | no | `true` | Silence without removing credentials |
+| `TELEGRAM_TIMEOUT` | no | `10` | Seconds per request |
 | `LOOP_INTERVAL_SECONDS` | no | `60` | Seconds between analysis passes |
 | `BARS_H4` / `BARS_M15` / `BARS_M5` | no | `400`/`500`/`500` | Candles per timeframe |
 | `RISK_PERCENT` | no | `2.5` | Percent of balance risked per trade |
@@ -288,6 +293,8 @@ bot/
   config.py                 environment parsing + validation
   session.py                DST-aware market session windows
   news.py                   macroeconomic news blackout filter
+  telegram.py               Telegram transport (stdlib HTTP, off a thread)
+  notifications.py          execution events -> Telegram messages
   scheduler.py              XAUUSD while Gold is open / BTCUSD while it is shut
   indicators.py             Awesome Oscillator, ATR
   risk.py                   stop loss, take profit, position sizing

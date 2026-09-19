@@ -127,6 +127,13 @@ class Config:
     news_request_timeout: float = 15.0
     news_block_all_day: bool = False
 
+    # --- telegram notifications -------------------------------------------
+    #: Both must be set for notifications to be sent; absent means silent.
+    telegram_bot_token: str | None = None
+    telegram_chat_id: str | None = None
+    telegram_enabled: bool = True
+    telegram_timeout: float = 10.0
+
     log_level: str = "INFO"
 
     @property
@@ -157,6 +164,10 @@ class Config:
             "news_window_minutes": (
                 f"-{self.news_before_minutes}/+{self.news_after_minutes}"
             ),
+            # Never log the bot token: it grants full control of the bot.
+            "telegram_bot_token": "***set***" if self.telegram_bot_token else None,
+            "telegram_chat_id": self.telegram_chat_id,
+            "telegram_enabled": self.telegram_enabled,
             "loop_interval_seconds": self.loop_interval_seconds,
             "risk_percent": self.risk_percent,
             "fixed_volume_lots": self.fixed_volume_lots,
@@ -240,6 +251,10 @@ def load_config() -> Config:
         news_cache_max_age_hours=max(1, _int("NEWS_CACHE_MAX_AGE_HOURS", 24)),
         news_request_timeout=_float("NEWS_REQUEST_TIMEOUT", 15.0),
         news_block_all_day=_bool("NEWS_BLOCK_ALL_DAY_EVENTS", False),
+        telegram_bot_token=_raw("TELEGRAM_BOT_TOKEN"),
+        telegram_chat_id=_raw("TELEGRAM_CHAT_ID"),
+        telegram_enabled=_bool("TELEGRAM_ENABLED", True),
+        telegram_timeout=_float("TELEGRAM_TIMEOUT", 10.0),
         log_level=(_raw("LOG_LEVEL", "INFO") or "INFO").upper(),
     )
     return config
