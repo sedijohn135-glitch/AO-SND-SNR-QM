@@ -105,7 +105,7 @@ class Config:
     bars_m5: int = 500
 
     # --- risk --------------------------------------------------------------
-    risk_percent: float = 0.5
+    risk_percent: float = 2.5
     fixed_volume_lots: float = 0.0
     max_open_positions: int = 1
     max_pending_orders: int = 1
@@ -178,7 +178,7 @@ def load_config() -> Config:
     except ZoneInfoNotFoundError as exc:
         raise ConfigError(f"BOT_TIMEZONE {tz_name!r} is not a valid IANA zone.") from exc
 
-    risk_percent = _float("RISK_PERCENT", 0.5)
+    risk_percent = _float("RISK_PERCENT", 2.5)
     if not 0 < risk_percent <= 100:
         raise ConfigError("RISK_PERCENT must be between 0 (exclusive) and 100.")
 
