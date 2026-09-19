@@ -226,7 +226,7 @@ cp .env.example .env
 | `NEWS_BLOCK_ALL_DAY_EVENTS` | no | `false` | Block on undated all-day entries |
 | `LOOP_INTERVAL_SECONDS` | no | `60` | Seconds between analysis passes |
 | `BARS_H4` / `BARS_M15` / `BARS_M5` | no | `400`/`500`/`500` | Candles per timeframe |
-| `RISK_PERCENT` | no | `0.5` | Percent of balance risked per trade |
+| `RISK_PERCENT` | no | `2.5` | Percent of balance risked per trade |
 | `FIXED_VOLUME_LOTS` | no | `0` | `>0` bypasses percentage sizing |
 | `MAX_OPEN_POSITIONS` | no | `1` | Per instrument |
 | `MAX_PENDING_ORDERS` | no | `1` | Per instrument |
@@ -247,6 +247,10 @@ python -u main.py
 ```
 
 ### 4. Deploy to Railway
+
+See **[DEPLOYMENT.md](DEPLOYMENT.md)** for the full checklist — getting an
+access token, finding your `ctidTraderAccountId`, every environment variable,
+what a healthy first run looks like, and troubleshooting. In short:
 
 1. Create a project from this repository. Nixpacks picks up `runtime.txt`
    (Python 3.11) and `requirements.txt`.

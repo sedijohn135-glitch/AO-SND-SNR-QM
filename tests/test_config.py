@@ -39,6 +39,22 @@ def test_loads_defaults(env):
     assert config.enable_trading is False
 
 
+def test_risk_percent_defaults_to_the_strategy_parameter(env):
+    """The codebase carries the real parameter, not a placeholder."""
+    assert load_config().risk_percent == 2.5
+
+
+def test_risk_percent_is_overridable(env):
+    env.setenv("RISK_PERCENT", "1.0")
+    assert load_config().risk_percent == 1.0
+
+
+def test_risk_percent_above_100_is_rejected(env):
+    env.setenv("RISK_PERCENT", "150")
+    with pytest.raises(ConfigError, match="RISK_PERCENT"):
+        load_config()
+
+
 def test_live_host_type_switches_endpoint(env):
     env.setenv("CTRADER_HOST_TYPE", "live")
     assert load_config().host == "live.ctraderapi.com"
