@@ -12,6 +12,14 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import load_dotenv
 
+from bot.session import (
+    DEFAULT_GOLD_SESSION_CLOSE,
+    DEFAULT_GOLD_SESSION_OPEN,
+    DEFAULT_GOLD_SESSION_TIMEZONE,
+    SessionError,
+    SessionWindow,
+)
+
 load_dotenv()
 
 
@@ -82,9 +90,12 @@ class Config:
     host_type: str = "demo"
 
     # --- instruments & schedule -------------------------------------------
+    #: Traded whenever its market is open.
     symbol_weekday: str = "XAUUSD"
+    #: Traded only while the weekday instrument's market is shut.
     symbol_weekend: str = "BTCUSD"
     timezone: ZoneInfo = field(default_factory=lambda: ZoneInfo("UTC"))
+    session: SessionWindow | None = None
 
     # --- runtime -----------------------------------------------------------
     loop_interval_seconds: int = 60
@@ -99,6 +110,9 @@ class Config:
     max_pending_orders: int = 1
     order_expiry_minutes: int = 240
     enable_trading: bool = False
+    #: HAPI 1 also asks that price be AT the H4 zone the bias wants.
+    require_h4_zone_proximity: bool = True
+    h4_zone_proximity_atr: float = 1.5
 
     log_level: str = "INFO"
 
@@ -122,6 +136,8 @@ class Config:
             "symbol_weekday": self.symbol_weekday,
             "symbol_weekend": self.symbol_weekend,
             "timezone": str(self.timezone),
+            "session": self.session.describe() if self.session else None,
+            "require_h4_zone_proximity": self.require_h4_zone_proximity,
             "loop_interval_seconds": self.loop_interval_seconds,
             "risk_percent": self.risk_percent,
             "fixed_volume_lots": self.fixed_volume_lots,
@@ -147,6 +163,24 @@ def load_config() -> Config:
     if not 0 < risk_percent <= 100:
         raise ConfigError("RISK_PERCENT must be between 0 (exclusive) and 100.")
 
+    session_tz_name = _raw("GOLD_SESSION_TIMEZONE", DEFAULT_GOLD_SESSION_TIMEZONE)
+    session_tz_name = session_tz_name or DEFAULT_GOLD_SESSION_TIMEZONE
+    try:
+        session_timezone = ZoneInfo(session_tz_name)
+    except ZoneInfoNotFoundError as exc:
+        raise ConfigError(
+            f"GOLD_SESSION_TIMEZONE {session_tz_name!r} is not a valid IANA zone."
+        ) from exc
+
+    try:
+        session = SessionWindow.parse(
+            _raw("GOLD_SESSION_OPEN", DEFAULT_GOLD_SESSION_OPEN) or DEFAULT_GOLD_SESSION_OPEN,
+            _raw("GOLD_SESSION_CLOSE", DEFAULT_GOLD_SESSION_CLOSE) or DEFAULT_GOLD_SESSION_CLOSE,
+            session_timezone,
+        )
+    except SessionError as exc:
+        raise ConfigError(str(exc)) from exc
+
     config = Config(
         app_id=_required("CTRADER_APP_ID"),
         app_secret=_required("CTRADER_APP_SECRET"),
@@ -157,6 +191,7 @@ def load_config() -> Config:
         symbol_weekday=(_raw("SYMBOL_WEEKDAY", "XAUUSD") or "XAUUSD").upper(),
         symbol_weekend=(_raw("SYMBOL_WEEKEND", "BTCUSD") or "BTCUSD").upper(),
         timezone=timezone,
+        session=session,
         loop_interval_seconds=max(5, _int("LOOP_INTERVAL_SECONDS", 60)),
         bars_h4=_int("BARS_H4", 400),
         bars_m15=_int("BARS_M15", 500),
@@ -167,6 +202,8 @@ def load_config() -> Config:
         max_pending_orders=_int("MAX_PENDING_ORDERS", 1),
         order_expiry_minutes=_int("ORDER_EXPIRY_MINUTES", 240),
         enable_trading=_bool("ENABLE_TRADING", False),
+        require_h4_zone_proximity=_bool("REQUIRE_H4_ZONE_PROXIMITY", True),
+        h4_zone_proximity_atr=_float("H4_ZONE_PROXIMITY_ATR", 1.5),
         log_level=(_raw("LOG_LEVEL", "INFO") or "INFO").upper(),
     )
     return config

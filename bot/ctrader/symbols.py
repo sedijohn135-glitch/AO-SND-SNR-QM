@@ -11,7 +11,9 @@ volume 10_000. ``ProtoOASymbol.lotSize`` carries the same scaling, which is why
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOASymbolByIdReq,
@@ -19,8 +21,12 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import (
 )
 
 from bot.ctrader.client import CTraderClient
+from bot.session import schedule_contains
 
 log = logging.getLogger(__name__)
+
+#: ProtoOATradingMode.ENABLED -- anything else means we must not open trades.
+TRADING_MODE_ENABLED = 0
 
 # Common broker aliases -> canonical name used in configuration.
 _ALIASES: dict[str, tuple[str, ...]] = {
@@ -45,6 +51,30 @@ class SymbolInfo:
     min_volume: int
     step_volume: int
     max_volume: int
+    #: Weekly trading intervals, in seconds from Sunday 00:00 of schedule_timezone.
+    schedule: tuple[tuple[int, int], ...] = field(default_factory=tuple)
+    schedule_timezone: str = "UTC"
+    trading_mode: int = TRADING_MODE_ENABLED
+
+    def is_trading_at(self, moment: datetime) -> bool | None:
+        """Is this symbol tradable at ``moment``?
+
+        Returns ``None`` when the broker sent no usable schedule, so the caller
+        can fall back to a configured session window rather than guessing.
+        """
+        if self.trading_mode != TRADING_MODE_ENABLED:
+            return False
+        if not self.schedule:
+            return None
+        try:
+            timezone = ZoneInfo(self.schedule_timezone)
+        except (ZoneInfoNotFoundError, ValueError):
+            log.warning(
+                "Broker sent unknown scheduleTimeZone %r for %s; ignoring schedule",
+                self.schedule_timezone, self.name,
+            )
+            return None
+        return schedule_contains(self.schedule, moment, timezone)
 
     @property
     def tick(self) -> float:
@@ -144,10 +174,18 @@ class SymbolResolver:
             min_volume=detail.minVolume,
             step_volume=detail.stepVolume,
             max_volume=detail.maxVolume,
+            schedule=tuple(
+                (interval.startSecond, interval.endSecond)
+                for interval in detail.schedule
+            ),
+            schedule_timezone=detail.scheduleTimeZone or "UTC",
+            trading_mode=detail.tradingMode,
         )
         self._by_name[name.upper()] = info
         log.info(
-            "Resolved %s -> id=%s digits=%s lotSize=%s minVolume=%s",
+            "Resolved %s -> id=%s digits=%s lotSize=%s minVolume=%s "
+            "schedule=%d interval(s) tz=%s",
             info.name, info.symbol_id, info.digits, info.lot_size, info.min_volume,
+            len(info.schedule), info.schedule_timezone,
         )
         return info
