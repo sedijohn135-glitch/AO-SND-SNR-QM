@@ -1,0 +1,12 @@
+# Lint configuration shared by local runs and CI, so `ruff check .` behaves
+# identically in both places.
+line-length = 100
+target-version = "py311"
+
+exclude = [".venv", "venv", "__pycache__"]
+
+[lint]
+# F  - pyflakes (undefined names, unused imports/variables)
+# E9 - syntax and IO errors
+# W  - whitespace warnings
+select = ["F", "E9", "W"]

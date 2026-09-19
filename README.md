@@ -240,9 +240,15 @@ require Python ≥ 3.12. The Awesome Oscillator is
 `SMA(median, 5) − SMA(median, 34)`, so `bot/indicators.py` computes it (and
 ATR) directly on pandas. One less dependency to break a deploy.
 
-`requirements.txt` also pins `pyOpenSSL` and `cryptography` together: an older
-pyOpenSSL against a modern cryptography aborts Twisted's TLS import with
-`AttributeError: module 'lib' has no attribute 'GEN_EMAIL'`.
+**The TLS pins are load-bearing.** `ctrader-open-api` hard-pins
+`pyOpenSSL==24.1.0`, so that pin drives the stack — pinning a newer pyOpenSSL
+makes `requirements.txt` uninstallable in a single pass (`ResolutionImpossible`)
+and breaks the Railway build. pyOpenSSL 24.1.0 in turn requires
+`cryptography<43`, and that bound must be respected: an old pyOpenSSL against a
+modern cryptography aborts Twisted's TLS import with
+`AttributeError: module 'lib' has no attribute 'GEN_EMAIL'`. Hence
+`cryptography==42.0.8`. CI installs from a clean environment on every push, so
+a regression here fails the build rather than the deploy.
 
 ---
 
@@ -250,7 +256,11 @@ pyOpenSSL against a modern cryptography aborts Twisted's TLS import with
 
 ```bash
 pytest -q     # 164 tests
+ruff check .  # lint
 ```
+
+Both run in CI (`.github/workflows/ci.yml`) on every push and pull request,
+against a clean Python 3.11 environment built from `requirements-dev.txt`.
 
 No network access required. Coverage includes:
 

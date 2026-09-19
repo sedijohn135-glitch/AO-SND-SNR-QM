@@ -4,14 +4,17 @@ ctrader-open-api==0.9.2
 protobuf==3.20.1
 Twisted==24.3.0
 
-# TLS for the Twisted SSL endpoint (live.ctraderapi.com:5035).
-# pyOpenSSL and cryptography MUST stay compatible: an older pyOpenSSL against a
-# modern cryptography aborts at import with
-#   AttributeError: module 'lib' has no attribute 'GEN_EMAIL'
-pyOpenSSL==26.4.0
-cryptography==50.0.1
-# Without service-identity Twisted only does rudimentary hostname verification.
-service-identity==26.1.0
+# --- TLS for the Twisted SSL endpoint (live.ctraderapi.com:5035) ----------
+# ctrader-open-api hard-pins pyOpenSSL==24.1.0, so that pin drives this stack:
+# pinning a newer pyOpenSSL here makes the file uninstallable in one pass
+# (pip: ResolutionImpossible) and breaks the Railway build.
+#
+# pyOpenSSL 24.1.0 requires cryptography<43, and that bound must be respected:
+# an old pyOpenSSL against a modern cryptography aborts Twisted's TLS import
+# with "AttributeError: module 'lib' has no attribute 'GEN_EMAIL'".
+cryptography==42.0.8
+# Without service-identity, Twisted does only rudimentary hostname verification.
+service-identity==24.2.0
 
 # --- Analysis --------------------------------------------------------------
 pandas==3.0.6
