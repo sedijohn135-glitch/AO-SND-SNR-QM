@@ -1,59 +1,100 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from bot.scheduler import SymbolSchedule, is_weekend
+from bot.scheduler import SymbolSchedule
+from bot.session import SessionWindow
 
+NY = ZoneInfo("America/New_York")
 UTC = ZoneInfo("UTC")
 
 
-def make_schedule(tz=UTC):
-    return SymbolSchedule("XAUUSD", "BTCUSD", tz)
+def make_schedule():
+    return SymbolSchedule(
+        primary_symbol="XAUUSD",
+        fallback_symbol="BTCUSD",
+        session=SessionWindow.parse("SUN 18:00", "FRI 17:00", NY),
+        timezone=UTC,
+    )
 
 
-def test_weekdays_select_gold():
+# -- selection follows the session, not the calendar day --------------------
+
+def test_gold_traded_while_its_market_is_open():
     schedule = make_schedule()
-    # 2026-09-14 is a Monday, 2026-09-18 a Friday.
-    for day in range(14, 19):
-        moment = datetime(2026, 9, day, 12, 0, tzinfo=UTC)
-        assert schedule.symbol_for(moment) == "XAUUSD", moment.strftime("%A")
+    assert schedule.symbol_for(datetime(2026, 9, 23, 12, 0, tzinfo=UTC)) == "XAUUSD"
 
 
-def test_weekend_selects_bitcoin():
+def test_bitcoin_traded_only_while_gold_is_shut():
     schedule = make_schedule()
-    for day in (19, 20):  # Saturday, Sunday
-        moment = datetime(2026, 9, day, 12, 0, tzinfo=UTC)
-        assert schedule.symbol_for(moment) == "BTCUSD", moment.strftime("%A")
-        assert is_weekend(moment)
+    assert schedule.symbol_for(datetime(2026, 9, 19, 12, 0, tzinfo=UTC)) == "BTCUSD"
 
+
+def test_sunday_evening_reopen_switches_back_to_gold():
+    """The point of session boundaries: Sunday 22:00 UTC is gold, not BTC."""
+    schedule = make_schedule()
+    assert schedule.symbol_for(datetime(2026, 9, 20, 21, 0, tzinfo=UTC)) == "BTCUSD"
+    assert schedule.symbol_for(datetime(2026, 9, 20, 23, 0, tzinfo=UTC)) == "XAUUSD"
+
+
+def test_friday_evening_close_switches_to_bitcoin():
+    schedule = make_schedule()
+    assert schedule.symbol_for(datetime(2026, 9, 18, 20, 0, tzinfo=UTC)) == "XAUUSD"
+    assert schedule.symbol_for(datetime(2026, 9, 18, 22, 0, tzinfo=UTC)) == "BTCUSD"
+
+
+# -- the broker's own schedule wins -----------------------------------------
+
+def test_broker_schedule_overrides_the_window():
+    schedule = make_schedule()
+    midweek = datetime(2026, 9, 23, 12, 0, tzinfo=UTC)
+    # Window says open, but the broker says closed (e.g. a holiday).
+    assert schedule.symbol_for(midweek, broker_says=False) == "BTCUSD"
+    assert schedule.symbol_for(midweek, broker_says=True) == "XAUUSD"
+
+
+def test_window_used_when_broker_is_silent():
+    schedule = make_schedule()
+    midweek = datetime(2026, 9, 23, 12, 0, tzinfo=UTC)
+    assert schedule.symbol_for(midweek, broker_says=None) == "XAUUSD"
+
+
+# -- handover ---------------------------------------------------------------
 
 def test_poll_reports_switch_once():
     schedule = make_schedule()
-    friday = datetime(2026, 9, 18, 12, 0, tzinfo=UTC)
-    saturday = datetime(2026, 9, 19, 12, 0, tzinfo=UTC)
-    sunday = datetime(2026, 9, 20, 12, 0, tzinfo=UTC)
+    friday = datetime(2026, 9, 18, 20, 0, tzinfo=UTC)     # gold open
+    saturday = datetime(2026, 9, 19, 12, 0, tzinfo=UTC)   # gold shut
+    sunday_am = datetime(2026, 9, 20, 10, 0, tzinfo=UTC)  # still shut
 
-    symbol, switch = schedule.poll(friday)
-    assert (symbol, switch) == ("XAUUSD", None)
+    assert schedule.poll(friday) == ("XAUUSD", None)
 
     symbol, switch = schedule.poll(saturday)
     assert symbol == "BTCUSD"
     assert switch is not None
     assert (switch.previous, switch.current) == ("XAUUSD", "BTCUSD")
+    assert "closed" in switch.reason
 
-    symbol, switch = schedule.poll(sunday)
-    assert (symbol, switch) == ("BTCUSD", None)
-
-
-def test_timezone_changes_the_boundary():
-    # 2026-09-19 00:30 in Tokyo is still Friday 15:30 UTC.
-    tokyo = SymbolSchedule("XAUUSD", "BTCUSD", ZoneInfo("Asia/Tokyo"))
-    utc = make_schedule()
-    moment = datetime(2026, 9, 18, 15, 30, tzinfo=UTC)
-    assert utc.symbol_for(moment) == "XAUUSD"
-    assert tokyo.symbol_for(moment) == "BTCUSD"
+    assert schedule.poll(sunday_am) == ("BTCUSD", None)
 
 
-def test_next_switch_lands_on_saturday():
+def test_poll_reports_the_switch_back_to_gold():
     schedule = make_schedule()
-    friday = datetime(2026, 9, 18, 12, 0, tzinfo=UTC)
-    assert schedule.next_switch(friday).date() == datetime(2026, 9, 19).date()
+    schedule.poll(datetime(2026, 9, 19, 12, 0, tzinfo=UTC))
+    _, switch = schedule.poll(datetime(2026, 9, 20, 23, 0, tzinfo=UTC))
+    assert switch is not None
+    assert (switch.previous, switch.current) == ("BTCUSD", "XAUUSD")
+
+
+def test_switch_reason_names_the_source():
+    schedule = make_schedule()
+    schedule.poll(datetime(2026, 9, 23, 12, 0, tzinfo=UTC), broker_says=True)
+    _, switch = schedule.poll(datetime(2026, 9, 23, 13, 0, tzinfo=UTC), broker_says=False)
+    assert switch is not None
+    assert "broker schedule" in switch.reason
+
+
+def test_active_tracks_the_last_poll():
+    schedule = make_schedule()
+    assert schedule.active is None
+    schedule.poll(datetime(2026, 9, 23, 12, 0, tzinfo=UTC))
+    assert schedule.active == "XAUUSD"

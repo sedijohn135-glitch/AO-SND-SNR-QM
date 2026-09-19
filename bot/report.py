@@ -15,7 +15,6 @@ _STATUS_TEXT = {
     SetupStatus.WAITING_RETEST: "WAITING FOR RETEST - pattern formed, price not in the zone",
     SetupStatus.NONE: "NONE - no Quasimodo formation",
     SetupStatus.BLOCKED: "BLOCKED - pattern found but a rule vetoed it",
-    SetupStatus.PENDING_IMPLEMENTATION: "PENDING - pattern engine not implemented yet",
 }
 
 

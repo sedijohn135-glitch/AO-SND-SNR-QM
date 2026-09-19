@@ -12,74 +12,97 @@ weekend. The full rule set lives in [`STRATEGY.md`](STRATEGY.md).
 
 ## Status
 
-This is the scaffold: transport, authentication, data, scheduling, risk and
-execution are working. The **pattern-recognition math is deliberately not
-written yet** — it is held for your sign-off, as agreed.
+Complete and tested end to end. Transport, authentication, data, scheduling,
+the full pattern-recognition pipeline, risk and execution are all implemented.
 
-| Area | Module | Status |
-| --- | --- | --- |
-| Config from environment | `bot/config.py` | Done |
-| Open API auth + reconnect | `bot/ctrader/client.py` | Done |
-| Symbol lookup / contract details | `bot/ctrader/symbols.py` | Done |
-| H4 / M15 / M5 OHLCV → pandas | `bot/ctrader/trendbars.py` | Done |
-| Weekday/weekend switching | `bot/scheduler.py` | Done |
-| Awesome Oscillator, ATR | `bot/indicators.py` | Done |
-| Swing/pivot detection | `bot/strategy/swings.py` | Done |
-| Stop loss / take profit / sizing | `bot/risk.py` | Done |
-| Order placement + cancellation | `bot/execution.py` | Done |
-| Five-point analysis report | `bot/report.py` | Done |
-| **H4 trend classification** | `bot/strategy/trend.py` | **Awaiting sign-off** |
-| **SND zone mapping (DBD/RBR)** | `bot/strategy/snd.py` | **Awaiting sign-off** |
-| **SNR level clustering** | `bot/strategy/snr.py` | **Awaiting sign-off** |
-| **Structure break (BOS/MSS)** | `bot/strategy/structure.py` | **Awaiting sign-off** |
-| **AO divergence detection** | `bot/strategy/divergence.py` | **Awaiting sign-off** |
-| **Quasimodo recognition** | `bot/strategy/quasimodo.py` | **Awaiting sign-off** |
+| Area | Module |
+| --- | --- |
+| Config from environment | `bot/config.py` |
+| Open API auth + reconnect | `bot/ctrader/client.py` |
+| Symbol lookup, contract details, trading schedule | `bot/ctrader/symbols.py` |
+| H4 / M15 / M5 OHLCV → pandas | `bot/ctrader/trendbars.py` |
+| Session windows (DST-aware) | `bot/session.py` |
+| Gold-session instrument switching | `bot/scheduler.py` |
+| Awesome Oscillator, ATR | `bot/indicators.py` |
+| Swing/pivot detection | `bot/strategy/swings.py` |
+| **HAPI 1** — H4 trend classification | `bot/strategy/trend.py` |
+| **HAPI 1/6** — SND zone mapping (DBD/RBR) | `bot/strategy/snd.py` |
+| **HAPI 2** — AO divergence | `bot/strategy/divergence.py` |
+| **HAPI 3** — structure break (BOS/MSS) | `bot/strategy/structure.py` |
+| **HAPI 4** — Quasimodo recognition | `bot/strategy/quasimodo.py` |
+| **HAPI 5** — SNR level clustering | `bot/strategy/snr.py` |
+| **HAPI 6** — stop loss / take profit / sizing | `bot/risk.py` |
+| Pipeline orchestration | `bot/strategy/engine.py` |
+| Order placement + cancellation | `bot/execution.py` |
+| Five-point analysis report | `bot/report.py` |
 
-Every stub carries a docstring describing the exact algorithm intended, and
-sets `IMPLEMENTED = False`. The pipeline runs end to end today: it stops at
-the first unimplemented gate and says so, rather than inventing a signal.
+Confirmed strategy parameters: **2/2 pivot strength**, breakout confirmed by a
+candle **body close**, **36 M5 candles (3h)** maximum pattern age, entry
+**exactly at the left-shoulder price**.
+
+A report from a fully aligned market looks like this:
 
 ```
 ====================================================================
- XAUUSD | 2026-09-19 15:45:16 UTC
+ XAUUSD | 2026-09-19 16:18:08 UTC
 ====================================================================
 
-1. H4 TREND        : RANGING
-   H4 trend detection not implemented yet
+1. H4 TREND        : BEARISH
+   Lower High and Lower Low on H4 (highs 145.2 -> 135.2, lows 139.8 -> 129.8).
 
 2. AO DIVERGENCE   : NO
+   No sell-side AO divergence on M15 or M5 (a warning only, not required for entry).
 
-3. STRUCTURE       : NOT BROKEN - entry forbidden
+3. STRUCTURE       : BROKEN
+   SELL BOS on M5: broke support at 89.8 (2026-01-05 05:30 UTC)
 
-4. QM SETUP        : PENDING - pattern engine not implemented yet
+4. QM SETUP        : VALID - order may be placed
+   SELL | Left Shoulder 100.20 | Head 110.20 | Breakout 79.80
 
-5. LEVELS          : n/a - no executable setup
+5. LEVELS
+   Direction   : SELL LIMIT
+   Entry       : 100.20
+   Entry zone  : 100.20 -> 110.20
+   Stop loss   : 110.65
+   Take profit : 87.60
+   Risk/Reward : 1.21
+   Volume      : 900 units
+   SNR confluence: none
 
 NOTES
-   - HAPI 1 pending: H4 trend detection not implemented.
+   - H4 BEARISH -> only SELL setups allowed.
+   - Take profit taken from the nearest M15 zone.
 ====================================================================
 ```
 
 ---
 
-## How the weekday/weekend switching works
+## How the instrument switching works
 
-`bot/scheduler.py` owns the calendar. Three pieces:
+The switch happens on **session boundaries**, not midnight. Gold is traded
+whenever the Gold market is open — including from the moment it reopens on
+Sunday evening — and Bitcoin only fills the window while Gold is genuinely
+shut.
 
-1. **Selection.** `SymbolSchedule.symbol_for(moment)` converts the moment into
-   `BOT_TIMEZONE` (default UTC) and returns `SYMBOL_WEEKEND` when
-   `weekday() in {5, 6}` (Saturday, Sunday), otherwise `SYMBOL_WEEKDAY`.
-   Evaluating in a configured zone rather than the container's local time
-   keeps the boundary deterministic wherever Railway schedules the worker.
+`bot/session.py` and `bot/scheduler.py` own this. Three pieces:
+
+1. **Is Gold open?** Two sources, in order of authority. The broker's own
+   weekly schedule (`ProtoOASymbol.schedule`) is exact and covers holidays and
+   maintenance breaks. When the broker publishes none, the configured session
+   window answers instead — defined in a market timezone
+   (`America/New_York` by default) so daylight saving is handled by the zone
+   rather than a hardcoded UTC offset. `SUN 18:00` is 22:00 UTC in summer and
+   23:00 UTC in winter.
 
 2. **Transition detection.** The loop calls `poll()` once per tick, which
    returns `(active_symbol, switch_or_None)`. `switch` is non-`None` exactly
-   once per changeover, so handover work runs once and not on every tick.
+   once per changeover, and carries the reason (which source decided, and
+   whether the market opened or closed).
 
 3. **Handover.** On a switch `main.py` cancels any pending order left on the
    outgoing instrument and drops its cached QM pattern, so a gold limit order
-   cannot sit unattended in the book all weekend. Only then does it resolve
-   the new symbol, subscribe to its spot feed and analyse it.
+   cannot sit unattended in the book over the weekend. Only then does it
+   resolve the new symbol, subscribe to its spot feed and analyse it.
 
 Both symbols are configurable (`SYMBOL_WEEKDAY`, `SYMBOL_WEEKEND`) and the
 resolver tolerates broker naming variants — `XAUUSD`, `XAU/USD`, `GOLD`,
@@ -117,7 +140,12 @@ cp .env.example .env
 | `CTRADER_HOST_TYPE` | no | `demo` | `demo` or `live` |
 | `SYMBOL_WEEKDAY` | no | `XAUUSD` | Monday–Friday instrument |
 | `SYMBOL_WEEKEND` | no | `BTCUSD` | Saturday–Sunday instrument |
-| `BOT_TIMEZONE` | no | `UTC` | IANA zone used for the day-of-week test |
+| `BOT_TIMEZONE` | no | `UTC` | IANA zone used for logging timestamps |
+| `GOLD_SESSION_TIMEZONE` | no | `America/New_York` | Market zone for the session window |
+| `GOLD_SESSION_OPEN` | no | `SUN 18:00` | Session open, in the market zone |
+| `GOLD_SESSION_CLOSE` | no | `FRI 17:00` | Session close, in the market zone |
+| `REQUIRE_H4_ZONE_PROXIMITY` | no | `true` | Require price to be at the H4 zone (HAPI 1) |
+| `H4_ZONE_PROXIMITY_ATR` | no | `1.5` | How near "at the zone" means, in H4 ATRs |
 | `LOOP_INTERVAL_SECONDS` | no | `60` | Seconds between analysis passes |
 | `BARS_H4` / `BARS_M15` / `BARS_M5` | no | `400`/`500`/`500` | Candles per timeframe |
 | `RISK_PERCENT` | no | `0.5` | Percent of balance risked per trade |
@@ -136,7 +164,7 @@ Credentials are only ever read from the environment. `.env` is gitignored and
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
-pytest                 # 66 tests, no network needed
+pytest                 # 164 tests, no network needed
 python -u main.py
 ```
 
@@ -176,20 +204,26 @@ main.py                     24/7 loop, signal handling, reactor bootstrap
 bot/
   reactor_setup.py          installs the asyncio Twisted reactor (import first!)
   config.py                 environment parsing + validation
-  scheduler.py              XAUUSD weekdays / BTCUSD weekends
+  session.py                DST-aware market session windows
+  scheduler.py              XAUUSD while Gold is open / BTCUSD while it is shut
   indicators.py             Awesome Oscillator, ATR
   risk.py                   stop loss, take profit, position sizing
   execution.py              spot feed, balance, orders, cancellation
   report.py                 the five-point analysis output
   ctrader/
     client.py               auth, reconnect, Deferred→async bridge
-    symbols.py              symbol lookup, contract details, volume maths
+    symbols.py              symbol lookup, contract details, trading schedule
     trendbars.py            OHLCV fetch and decode
   strategy/
     types.py                shared value objects
-    swings.py               pivot detection
+    swings.py               pivot detection (2/2 confirmation)
     engine.py               HAPI 1→6 orchestration
-    trend.py snd.py snr.py structure.py divergence.py quasimodo.py
+    trend.py                HAPI 1 — H4 bias
+    snd.py                  HAPI 1/6 — Drop-Base-Drop / Rally-Base-Rally zones
+    divergence.py           HAPI 2 — AO divergence
+    structure.py            HAPI 3 — break of structure (body close)
+    quasimodo.py            HAPI 4 — QM recognition
+    snr.py                  HAPI 5 — S/R level clustering
 ```
 
 ### Two implementation notes
@@ -206,20 +240,45 @@ require Python ≥ 3.12. The Awesome Oscillator is
 `SMA(median, 5) − SMA(median, 34)`, so `bot/indicators.py` computes it (and
 ATR) directly on pandas. One less dependency to break a deploy.
 
-`requirements.txt` also pins `pyOpenSSL` and `cryptography` together: an older
-pyOpenSSL against a modern cryptography aborts Twisted's TLS import with
-`AttributeError: module 'lib' has no attribute 'GEN_EMAIL'`.
+**The TLS pins are load-bearing.** `ctrader-open-api` hard-pins
+`pyOpenSSL==24.1.0`, so that pin drives the stack — pinning a newer pyOpenSSL
+makes `requirements.txt` uninstallable in a single pass (`ResolutionImpossible`)
+and breaks the Railway build. pyOpenSSL 24.1.0 in turn requires
+`cryptography<43`, and that bound must be respected: an old pyOpenSSL against a
+modern cryptography aborts Twisted's TLS import with
+`AttributeError: module 'lib' has no attribute 'GEN_EMAIL'`. Hence
+`cryptography==42.0.8`. CI installs from a clean environment on every push, so
+a regression here fails the build rather than the deploy.
 
 ---
 
 ## Tests
 
 ```bash
-pytest -q     # 66 tests
+pytest -q     # 164 tests
+ruff check .  # lint
 ```
 
-Covers the calendar and its timezone boundary, AO/ATR against a manual SMA
-reference, pivot confirmation, trendbar delta/scale decoding, volume
-normalisation, the full risk chain, config validation and redaction, the
-report renderer, and an end-to-end pipeline pass on synthetic data. No network
-access required.
+Both run in CI (`.github/workflows/ci.yml`) on every push and pull request,
+against a clean Python 3.11 environment built from `requirements-dev.txt`.
+
+No network access required. Coverage includes:
+
+- **Session boundaries** — the Sunday reopen and Friday close, and that the
+  same `SUN 18:00` lands on 22:00 UTC in summer and 23:00 UTC in winter;
+- **Instrument handover** — switching both ways, the broker schedule
+  overriding the window, and the switch firing exactly once;
+- **Indicators** — AO against a manually computed SMA difference;
+- **Pattern modules** — each of the six, on purpose-built fixtures: HH/HL vs
+  LH/LL vs expanding range; Drop-Base-Drop and Rally-Base-Rally geometry
+  including which edge is proximal; repeated-bounce S/R clustering; a wick
+  through a level rejected where a body close is accepted; price-HH-with-AO-LH
+  divergence and the momentum-confirmed case that must *not* fire; the QM
+  four-pivot shape, entry at the shoulder, the 36-bar age limit and
+  invalidation;
+- **Risk** — the full chain, the R:R floor and volume-step snapping;
+- **Pipeline** — an aligned market producing a complete priced setup, plus each
+  gate standing the bot down, and a random-walk smoke test.
+
+`tests/factories.py` builds deterministic OHLCV from zigzag paths, so a test
+states the shape it wants and gets pivots exactly where it expects them.

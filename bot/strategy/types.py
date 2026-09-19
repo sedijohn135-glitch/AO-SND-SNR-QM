@@ -61,7 +61,6 @@ class SetupStatus(str, Enum):
     WAITING_RETEST = "WAITING_RETEST"  # pattern formed, price not in the zone
     NONE = "NONE"                      # no pattern
     BLOCKED = "BLOCKED"                # pattern found but a rule vetoed it
-    PENDING_IMPLEMENTATION = "PENDING_IMPLEMENTATION"
 
 
 @dataclass(frozen=True)

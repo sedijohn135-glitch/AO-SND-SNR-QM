@@ -59,8 +59,9 @@ class TradingBot:
         self._resolver = SymbolResolver(self._client, config.account_id)
         self._broker = Broker(self._client, config.account_id)
         self._schedule = SymbolSchedule(
-            weekday_symbol=config.symbol_weekday,
-            weekend_symbol=config.symbol_weekend,
+            primary_symbol=config.symbol_weekday,
+            fallback_symbol=config.symbol_weekend,
+            session=config.session,
             timezone=config.timezone,
         )
         self._running = False
@@ -106,12 +107,16 @@ class TradingBot:
             await asyncio.sleep(self._config.loop_interval_seconds)
 
     async def _tick(self) -> None:
-        symbol_name, switch = self._schedule.poll()
+        await self._client.wait_until_ready()
+
+        # The primary instrument's own trading schedule decides the boundary,
+        # so resolve it first even on a tick that ends up trading the fallback.
+        moment = self._schedule.now()
+        broker_says = await self._primary_is_open(moment)
+        symbol_name, switch = self._schedule.poll(moment, broker_says=broker_says)
 
         if switch is not None:
             await self._handle_switch(switch.previous)
-
-        await self._client.wait_until_ready()
 
         symbol = await self._resolver.get(symbol_name)
         await self._broker.subscribe_spots(symbol.symbol_id)
@@ -124,6 +129,8 @@ class TradingBot:
             symbol=symbol,
             risk_percent=self._config.risk_percent,
             fixed_volume_lots=self._config.fixed_volume_lots,
+            require_h4_zone_proximity=self._config.require_h4_zone_proximity,
+            h4_zone_proximity_atr=self._config.h4_zone_proximity_atr,
         )
         report = engine.analyse(frames, spread=spread, balance=snapshot.balance)
         print(render(report), flush=True)
@@ -144,6 +151,23 @@ class TradingBot:
             report.setup, symbol, expiry_minutes=self._config.order_expiry_minutes
         )
         self._active_patterns[symbol.symbol_id] = report.setup.pattern
+
+    async def _primary_is_open(self, moment) -> bool | None:
+        """Ask the broker whether the primary instrument is trading.
+
+        Returns None when the broker publishes no usable schedule, so the
+        scheduler falls back to the configured session window.
+        """
+        try:
+            primary = await self._resolver.get(self._schedule.primary_symbol)
+        except LookupError:
+            log.warning(
+                "Cannot resolve %s to read its trading schedule; "
+                "falling back to the configured session window",
+                self._schedule.primary_symbol,
+            )
+            return None
+        return primary.is_trading_at(moment)
 
     async def _fetch_frames(self, symbol_id: int) -> MarketFrames:
         h4, m15, m5 = await asyncio.gather(

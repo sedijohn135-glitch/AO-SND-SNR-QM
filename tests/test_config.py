@@ -16,6 +16,8 @@ def env(monkeypatch):
         "CTRADER_HOST_TYPE", "BOT_TIMEZONE", "RISK_PERCENT",
         "ENABLE_TRADING", "SYMBOL_WEEKDAY", "SYMBOL_WEEKEND",
         "CTRADER_REFRESH_TOKEN", "LOOP_INTERVAL_SECONDS",
+        "GOLD_SESSION_TIMEZONE", "GOLD_SESSION_OPEN", "GOLD_SESSION_CLOSE",
+        "REQUIRE_H4_ZONE_PROXIMITY", "H4_ZONE_PROXIMITY_ATR",
     ]:
         monkeypatch.delenv(key, raising=False)
     for key, value in BASE_ENV.items():
@@ -81,3 +83,47 @@ def test_redacted_hides_secrets(env):
     redacted = load_config().redacted()
     assert redacted["access_token"] == "***set***"
     assert "app-secret" not in str(redacted)
+
+
+# -- session window ----------------------------------------------------------
+
+def test_default_session_is_the_comex_gold_window(env):
+    session = load_config().session
+    assert session is not None
+    assert "SUN 18:00" in session.describe()
+    assert "FRI 17:00" in session.describe()
+    assert "America/New_York" in session.describe()
+
+
+def test_session_boundaries_are_configurable(env):
+    env.setenv("GOLD_SESSION_OPEN", "SUN 22:00")
+    env.setenv("GOLD_SESSION_CLOSE", "FRI 21:00")
+    env.setenv("GOLD_SESSION_TIMEZONE", "UTC")
+    session = load_config().session
+    assert "SUN 22:00" in session.describe()
+    assert "UTC" in session.describe()
+
+
+def test_malformed_session_boundary_is_rejected(env):
+    env.setenv("GOLD_SESSION_OPEN", "SUNDAY 18:00")
+    with pytest.raises(ConfigError, match="session boundary"):
+        load_config()
+
+
+def test_bad_session_timezone_is_rejected(env):
+    env.setenv("GOLD_SESSION_TIMEZONE", "Mars/Olympus_Mons")
+    with pytest.raises(ConfigError, match="GOLD_SESSION_TIMEZONE"):
+        load_config()
+
+
+def test_h4_zone_proximity_defaults_on(env):
+    assert load_config().require_h4_zone_proximity is True
+
+
+def test_h4_zone_proximity_can_be_disabled(env):
+    env.setenv("REQUIRE_H4_ZONE_PROXIMITY", "false")
+    assert load_config().require_h4_zone_proximity is False
+
+
+def test_session_appears_in_redacted_snapshot(env):
+    assert "SUN 18:00" in str(load_config().redacted()["session"])
