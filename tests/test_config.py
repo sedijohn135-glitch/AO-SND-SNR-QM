@@ -22,6 +22,8 @@ def env(monkeypatch):
         "NEWS_MIN_IMPACT", "NEWS_BLACKOUT_BEFORE_MINUTES",
         "NEWS_BLACKOUT_AFTER_MINUTES", "NEWS_REFRESH_MINUTES",
         "NEWS_CACHE_MAX_AGE_HOURS", "NEWS_BLOCK_ALL_DAY_EVENTS",
+        "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "TELEGRAM_ENABLED",
+        "TELEGRAM_TIMEOUT",
     ]:
         monkeypatch.delenv(key, raising=False)
     for key, value in BASE_ENV.items():
@@ -194,3 +196,43 @@ def test_news_settings_appear_in_redacted_snapshot(env):
     redacted = load_config().redacted()
     assert redacted["news_filter_enabled"] is True
     assert redacted["news_window_minutes"] == "-30/+30"
+
+
+# -- telegram ----------------------------------------------------------------
+
+def test_telegram_is_unset_by_default(env):
+    config = load_config()
+    assert config.telegram_bot_token is None
+    assert config.telegram_chat_id is None
+
+
+def test_blank_telegram_values_are_treated_as_unset(env):
+    env.setenv("TELEGRAM_BOT_TOKEN", "   ")
+    env.setenv("TELEGRAM_CHAT_ID", "")
+    config = load_config()
+    assert config.telegram_bot_token is None
+    assert config.telegram_chat_id is None
+
+
+def test_telegram_values_are_read(env):
+    env.setenv("TELEGRAM_BOT_TOKEN", "123:abc")
+    env.setenv("TELEGRAM_CHAT_ID", "-100123")
+    config = load_config()
+    assert config.telegram_bot_token == "123:abc"
+    assert config.telegram_chat_id == "-100123"
+
+
+def test_telegram_can_be_disabled_without_removing_credentials(env):
+    env.setenv("TELEGRAM_BOT_TOKEN", "123:abc")
+    env.setenv("TELEGRAM_CHAT_ID", "-100123")
+    env.setenv("TELEGRAM_ENABLED", "false")
+    assert load_config().telegram_enabled is False
+
+
+def test_bot_token_never_appears_in_the_redacted_snapshot(env):
+    """The token grants full control of the bot; it must not reach a log."""
+    env.setenv("TELEGRAM_BOT_TOKEN", "123:super-secret-token-value")
+    env.setenv("TELEGRAM_CHAT_ID", "-100123")
+    redacted = load_config().redacted()
+    assert redacted["telegram_bot_token"] == "***set***"
+    assert "super-secret" not in str(redacted)

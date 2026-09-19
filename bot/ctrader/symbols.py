@@ -146,6 +146,18 @@ class SymbolResolver:
             f"Known examples: {sorted(self._catalogue)[:10]}"
         )
 
+    def by_id(self, symbol_id: int) -> SymbolInfo | None:
+        """Look a cached symbol up by id.
+
+        Execution events identify instruments by id, not name, so the
+        notifier needs the reverse of ``get``. Only symbols already resolved
+        are known -- which is every symbol the bot trades.
+        """
+        for info in self._by_name.values():
+            if info.symbol_id == symbol_id:
+                return info
+        return None
+
     async def get(self, name: str) -> SymbolInfo:
         cached = self._by_name.get(name.upper())
         if cached is not None:
