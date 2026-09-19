@@ -35,6 +35,21 @@ ENTRY_ORDER_TYPES = frozenset({ProtoOAOrderType.LIMIT, ProtoOAOrderType.STOP})
 
 _SIDE_NAME = {ProtoOATradeSide.BUY: "BUY", ProtoOATradeSide.SELL: "SELL"}
 
+#: Retail convention diverges from the broker's pipPosition on metals. cTrader
+#: treats 0.01 as a pip for XAUUSD, so a $35 move computes as 3500 pips, while
+#: traders read that as 350. Divide the displayed figure for these instruments
+#: only -- BTCUSD and the FX majors already match the broker's definition.
+#: Keys are symbol names with punctuation stripped, so "XAU/USD" matches too.
+PIP_DISPLAY_DIVISOR: dict[str, float] = {"XAUUSD": 10.0}
+
+
+def _pip_divisor(symbol: SymbolInfo | None) -> float:
+    """How much to scale the raw pip count for display."""
+    if symbol is None:
+        return 1.0
+    key = "".join(ch for ch in symbol.name.upper() if ch.isalnum())
+    return PIP_DISPLAY_DIVISOR.get(key, 1.0)
+
 
 def _side(value: int) -> str:
     return _SIDE_NAME.get(value, "?")
@@ -209,7 +224,7 @@ class TradeNotifier:
             else entry - exit_price
         )
         pip = symbol.pip if symbol is not None else 0.0001
-        pips = moved / pip if pip else 0.0
+        pips = (moved / pip if pip else 0.0) / _pip_divisor(symbol)
 
         won = net >= 0
         marker = "\U0001f7e2" if won else "\U0001f534"

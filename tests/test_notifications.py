@@ -210,7 +210,7 @@ def test_closed_position_reports_currency_and_pips():
     assert "2000.00" in text                 # entry
     assert "1965.00" in text                 # exit
     assert "+313.50" in text                 # 315.00 gross - 1.50 commission
-    assert "+3500.0" in text                 # 35.00 price / 0.01 pip
+    assert "+350.0" in text                  # 35.00 move, retail gold pips
 
 
 def test_a_closing_buy_deal_reports_the_position_as_a_sell():
@@ -227,7 +227,7 @@ def test_a_loss_is_signed_negative():
         event(ProtoOAExecutionType.ORDER_FILLED, deal=losing_sell_close())
     )
     assert "-95.55" in text                  # -94.05 gross - 1.50 commission
-    assert "-1045.0" in text                 # moved against us
+    assert "-104.5" in text                  # moved against us
 
 
 def test_win_and_loss_use_different_markers():
@@ -355,3 +355,54 @@ def test_dispatch_sends_through_the_transport():
     sender = asyncio.run(run())
     assert len(sender.calls) == 1
     assert "LIMIT ORDER PLACED" in sender.calls[0]["text"]
+
+
+# -- pip display convention --------------------------------------------------
+
+def test_gold_pips_follow_the_retail_convention():
+    """cTrader calls 0.01 a pip for XAUUSD; traders call $1 ten pips."""
+    notifier, _ = make_notifier()
+    text = notifier.format_event(
+        event(ProtoOAExecutionType.ORDER_FILLED, deal=winning_sell_close())
+    )
+    assert "+350.0" in text
+    assert "3500" not in text
+
+
+def test_a_broker_naming_variant_still_gets_the_gold_divisor():
+    gold_slashed = SymbolInfo(
+        symbol_id=41, name="XAU/USD", digits=2, pip_position=2,
+        lot_size=10_000, min_volume=100, step_volume=100, max_volume=20_000_000,
+    )
+    notifier, _ = make_notifier(lookup=lambda _id: gold_slashed)
+    text = notifier.format_event(
+        event(ProtoOAExecutionType.ORDER_FILLED, deal=winning_sell_close())
+    )
+    assert "+350.0" in text
+
+
+def test_bitcoin_pips_are_left_at_the_broker_definition():
+    bitcoin = SymbolInfo(
+        symbol_id=22395, name="BTCUSD", digits=2, pip_position=2,
+        lot_size=100, min_volume=1, step_volume=1, max_volume=1_000_000,
+    )
+    notifier, _ = make_notifier(lookup=lambda _id: bitcoin)
+    detail = ProtoOAClosePositionDetail(
+        entryPrice=60000.0, grossProfit=10000, swap=0, commission=0,
+        balance=1_000_000, closedVolume=100, moneyDigits=2,
+    )
+    closing = deal(side=ProtoOATradeSide.BUY, execution_price=59900.0,
+                   close_detail=detail)
+    text = notifier.format_event(
+        event(ProtoOAExecutionType.ORDER_FILLED, deal=closing)
+    )
+    # A $100 move at 0.01 per pip stays 10000 -- no divisor for BTCUSD.
+    assert "+10000.0" in text
+
+
+def test_an_unknown_symbol_gets_no_divisor():
+    notifier, _ = make_notifier(lookup=lambda _id: None)
+    text = notifier.format_event(
+        event(ProtoOAExecutionType.ORDER_FILLED, deal=winning_sell_close())
+    )
+    assert "Pips:" in text     # falls back to a 0.0001 pip, undivided
