@@ -1,13 +1,22 @@
 import pandas as pd
+import pytest
 
 from bot.strategy.quasimodo import (
     MAX_PATTERN_AGE_BARS,
+    MIN_HEAD_DEPTH_ATR,
     find_quasimodo,
     is_invalidated,
     is_stale,
 )
 from bot.strategy.types import Direction, SwingKind
-from tests.factories import buy_qm_path, candles_from_path, sell_qm_path, zigzag
+from tests.factories import (
+    buy_qm_path,
+    buy_qm_with_deep_low_inside,
+    candles_from_path,
+    micro_buy_qm,
+    sell_qm_path,
+    zigzag,
+)
 
 
 def sell_frame():
@@ -129,3 +138,76 @@ def test_invalidation_on_an_empty_frame_is_false():
     pattern = find_quasimodo(frame, Direction.SELL, "M5")
     assert pattern is not None
     assert not is_invalidated(pattern, frame.iloc[0:0])
+
+
+# -- the head is the structural extreme, not the matched pivot ---------------
+
+def test_the_head_is_the_absolute_low_of_the_formation():
+    """A shallow pivot must not become the head when a deeper low exists."""
+    frame = buy_qm_with_deep_low_inside()
+    pattern = find_quasimodo(frame, Direction.BUY, "M5")
+    assert pattern is not None
+    window = frame["low"].iloc[
+        pattern.left_shoulder.index : pattern.breakout.index + 1
+    ]
+    assert pattern.head.price == pytest.approx(window.min())
+    assert pattern.head.price == pytest.approx(80_280.0)
+
+
+def test_that_head_puts_the_stop_outside_the_structure():
+    frame = buy_qm_with_deep_low_inside()
+    pattern = find_quasimodo(frame, Direction.BUY, "M5")
+    depth = pattern.left_shoulder.price - pattern.head.price
+    assert depth > 100          # real structure, not a couple of points
+
+
+def test_the_sell_head_is_the_absolute_high():
+    frame = candles_from_path(sell_qm_path())
+    pattern = find_quasimodo(frame, Direction.SELL, "M5")
+    assert pattern is not None
+    window = frame["high"].iloc[
+        pattern.left_shoulder.index : pattern.breakout.index + 1
+    ]
+    assert pattern.head.price == pytest.approx(window.max())
+
+
+def test_the_head_carries_the_bar_it_came_from():
+    frame = buy_qm_with_deep_low_inside()
+    pattern = find_quasimodo(frame, Direction.BUY, "M5")
+    assert frame["low"].iloc[pattern.head.index] == pytest.approx(pattern.head.price)
+    assert pattern.head.kind is SwingKind.LOW
+
+
+# -- formations too shallow to trade -----------------------------------------
+
+def test_a_micro_formation_is_rejected():
+    """The live order that had to be cancelled: a two-point QM.
+
+    Entry 80388.42 with a stop at 80368.46 -- 19.96 points on BTCUSD, inside
+    the noise, reported as a 32:1 reward ratio.
+    """
+    assert find_quasimodo(micro_buy_qm(), Direction.BUY, "M5") is None
+
+
+def test_the_micro_formation_is_what_the_old_rule_would_have_matched():
+    """With the depth guard off it still matches -- and the stop is absurd."""
+    pattern = find_quasimodo(
+        micro_buy_qm(), Direction.BUY, "M5", min_head_depth_atr=0.0
+    )
+    assert pattern is not None
+    depth = pattern.left_shoulder.price - pattern.head.price
+    assert depth < 5            # two points of "structure"
+
+
+def test_real_structure_survives_the_depth_guard():
+    assert find_quasimodo(buy_qm_with_deep_low_inside(), Direction.BUY, "M5") is not None
+
+
+def test_the_depth_guard_can_be_relaxed():
+    frame = micro_buy_qm()
+    assert find_quasimodo(frame, Direction.BUY, "M5", min_head_depth_atr=0.0) is not None
+    assert find_quasimodo(frame, Direction.BUY, "M5", min_head_depth_atr=0.5) is None
+
+
+def test_the_default_depth_requirement():
+    assert MIN_HEAD_DEPTH_ATR == 0.5

@@ -202,3 +202,62 @@ def drop_base_drop_from_chart() -> pd.DataFrame:
 
     index = pd.date_range("2026-09-20 04:20", periods=len(rows), freq="5min", tz="UTC")
     return pd.DataFrame(rows, index=index)
+
+
+def _quiet(bars: int, price: float) -> list[dict]:
+    """Bars too flat to register as pivots -- spacing between structure."""
+    return [
+        {"open": price, "high": price + 3, "low": price - 3,
+         "close": price, "volume": 100.0}
+        for _ in range(bars)
+    ]
+
+
+def _bar(open_, high, low, close) -> dict:
+    return {"open": open_, "high": high, "low": low, "close": close,
+            "volume": 100.0}
+
+
+def _m5(rows: list[dict]) -> pd.DataFrame:
+    index = pd.date_range("2026-09-20 16:00", periods=len(rows), freq="5min", tz="UTC")
+    return pd.DataFrame(rows, index=index)
+
+
+def buy_qm_with_deep_low_inside() -> pd.DataFrame:
+    """A BUY QM whose real structural low sits inside the formation.
+
+    The matched pivot low is shallow; the absolute low of the span is 80280.
+    Taking the pivot as the head produced a stop inside the structure.
+    """
+    return _m5(
+        _quiet(6, 80_500)
+        + [_bar(80_500, 80_505, 80_388, 80_395)]      # left shoulder
+        + _quiet(2, 80_420)
+        + [_bar(80_420, 80_470, 80_415, 80_465)]      # shoulder high
+        + _quiet(2, 80_440)
+        + [_bar(80_440, 80_445, 80_280, 80_300)]      # the real low
+        + _quiet(2, 80_340)
+        + [_bar(80_340, 80_520, 80_335, 80_515)]      # breakout
+        + _quiet(3, 80_500)
+    )
+
+
+def micro_buy_qm() -> pd.DataFrame:
+    """The formation behind the live order that had to be cancelled.
+
+    Shoulder 80388.42, matched head 80386.46 -- under two points apart, inside
+    a consolidation whose real low is 80281 and sits *before* the shoulder, so
+    no rule scanning the formation can reach it. The whole structure is noise.
+    """
+    return _m5(
+        [_bar(80_330, 80_350, 80_281, 80_300)]        # real low, before the QM
+        + _quiet(6, 80_400)
+        + [_bar(80_400, 80_410, 80_388.42, 80_395)]   # left shoulder
+        + _quiet(2, 80_420)
+        + [_bar(80_420, 80_445, 80_415, 80_440)]      # small high
+        + _quiet(2, 80_400)
+        + [_bar(80_400, 80_405, 80_386.46, 80_392)]   # the matched "head"
+        + _quiet(2, 80_400)
+        + [_bar(80_400, 80_460, 80_396, 80_455)]      # breakout
+        + _quiet(3, 80_450)
+    )

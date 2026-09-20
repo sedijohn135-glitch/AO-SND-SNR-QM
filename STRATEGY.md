@@ -130,6 +130,24 @@ Confirmed parameters:
 | Breakout confirmation | a candle **body close** beyond the prior extreme; a wick is not enough |
 | Maximum pattern age | **36 M5 candles (3 hours)** after the breakout closes |
 | Entry placement | **exactly at the left-shoulder price** — no deeper offset into the zone |
+| Head level | the **absolute extreme** of every candle between shoulder and breakout, not the matched pivot |
+| Minimum depth | the head must be at least **0.5 × ATR** beyond the shoulder |
+
+### Why the head is not simply the matched pivot
+
+The four pivots locate the *formation*; the head's **price** is the absolute
+extreme across it. A 2/2 fractal only needs two bars either side, so it will
+mark a micro-pause a couple of points below the shoulder while the real
+structural low sits far beneath. The stop is measured from the head, so that
+mistake produces a stop of noise width — one live BUY was placed with a 19.96
+point stop on BTCUSD and a fictitious 32:1 reward ratio.
+
+Taking the absolute extreme is necessary but not sufficient: the same fractal
+will match a formation that is *itself* only a couple of points tall, where the
+extreme and the pivot coincide at the same trivial level.
+`MIN_HEAD_DEPTH_ATR` therefore rejects any formation shallower than half an
+ATR. Structure that small is noise, and a stop drawn inside it is a guaranteed
+loss rather than a risk limit.
 
 A pattern price has already closed through is dropped at detection, and a setup
 whose price already sits inside the zone is reported as `WAITING_RETEST` rather
