@@ -406,3 +406,87 @@ def test_an_unknown_symbol_gets_no_divisor():
         event(ProtoOAExecutionType.ORDER_FILLED, deal=winning_sell_close())
     )
     assert "Pips:" in text     # falls back to a 0.0001 pip, undivided
+
+
+# -- unit labels match the broker's own terminology --------------------------
+
+def btc_symbol():
+    return SymbolInfo(
+        symbol_id=22395, name="BTCUSD", digits=2, pip_position=2,
+        lot_size=100, min_volume=1, step_volume=1, max_volume=1_000_000,
+    )
+
+
+def btc_close():
+    detail = ProtoOAClosePositionDetail(
+        entryPrice=80_486.41, grossProfit=3020, swap=0, commission=0,
+        balance=1_000_000, closedVolume=10, moneyDigits=2,
+    )
+    return deal(side=ProtoOATradeSide.SELL, execution_price=80_788.37,
+                close_detail=detail)
+
+
+def test_bitcoin_is_reported_in_points():
+    """The broker ticket says 'points' for BTCUSD, so the alert should too."""
+    notifier, _ = make_notifier(lookup=lambda _id: btc_symbol())
+    text = notifier.format_event(
+        event(ProtoOAExecutionType.ORDER_FILLED, deal=btc_close())
+    )
+    assert "Points:" in text
+    assert "Pips:" not in text
+
+
+def test_the_bitcoin_point_count_matches_the_broker():
+    """80788.37 - 80486.41 shows as 30196 points on the ticket."""
+    notifier, _ = make_notifier(lookup=lambda _id: btc_symbol())
+    text = notifier.format_event(
+        event(ProtoOAExecutionType.ORDER_FILLED, deal=btc_close())
+    )
+    assert "+30196.0" in text
+
+
+def test_gold_stays_in_pips():
+    notifier, _ = make_notifier()
+    text = notifier.format_event(
+        event(ProtoOAExecutionType.ORDER_FILLED, deal=winning_sell_close())
+    )
+    assert "Pips:" in text
+    assert "Points:" not in text
+
+
+def test_an_unknown_instrument_defaults_to_pips():
+    notifier, _ = make_notifier(lookup=lambda _id: None)
+    text = notifier.format_event(
+        event(ProtoOAExecutionType.ORDER_FILLED, deal=winning_sell_close())
+    )
+    assert "Pips:" in text
+
+
+# -- the margin-scaling note -------------------------------------------------
+
+def test_an_order_note_is_attached_to_the_placement_message():
+    notifier, _ = make_notifier()
+    notifier.note_order_context(41, "(Scaled for margin)")
+    text = notifier.format_event(
+        event(ProtoOAExecutionType.ORDER_ACCEPTED, order=order())
+    )
+    assert "Scaled for margin" in text
+
+
+def test_the_note_is_consumed_once():
+    notifier, _ = make_notifier()
+    notifier.note_order_context(41, "(Scaled for margin)")
+    first = notifier.format_event(
+        event(ProtoOAExecutionType.ORDER_ACCEPTED, order=order()))
+    second = notifier.format_event(
+        event(ProtoOAExecutionType.ORDER_ACCEPTED, order=order()))
+    assert "Scaled for margin" in first
+    assert "Scaled for margin" not in second
+
+
+def test_no_note_means_no_extra_line():
+    notifier, _ = make_notifier()
+    text = notifier.format_event(
+        event(ProtoOAExecutionType.ORDER_ACCEPTED, order=order())
+    )
+    assert "Scaled" not in text

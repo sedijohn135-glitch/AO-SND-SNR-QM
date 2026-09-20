@@ -214,6 +214,8 @@ class TradeSetup:
     target_zone: Zone | None = None
     #: Where the take profit came from -- an SND zone, or the fixed-R fallback.
     target_source: str = "zone"
+    #: True when the margin cap reduced the size below what risk alone wanted.
+    scaled_for_margin: bool = False
     confluence: list[Level] = field(default_factory=list)
 
     @property

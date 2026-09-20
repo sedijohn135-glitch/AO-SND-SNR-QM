@@ -35,20 +35,28 @@ ENTRY_ORDER_TYPES = frozenset({ProtoOAOrderType.LIMIT, ProtoOAOrderType.STOP})
 
 _SIDE_NAME = {ProtoOATradeSide.BUY: "BUY", ProtoOATradeSide.SELL: "SELL"}
 
-#: Retail convention diverges from the broker's pipPosition on metals. cTrader
-#: treats 0.01 as a pip for XAUUSD, so a $35 move computes as 3500 pips, while
-#: traders read that as 350. Divide the displayed figure for these instruments
-#: only -- BTCUSD and the FX majors already match the broker's definition.
+#: How each instrument's price movement is reported: (divisor, label).
+#:
+#: cTrader treats 0.01 as a pip on both XAUUSD and BTCUSD, but traders read
+#: those figures differently. A $35 gold move is 350 pips to a trader, not
+#: 3500, so gold is divided by ten. Bitcoin is quoted in *points* by the
+#: broker's own order ticket -- a 301.96 move shows there as "30196 points" --
+#: so it keeps the raw figure and takes the broker's word.
+#:
 #: Keys are symbol names with punctuation stripped, so "XAU/USD" matches too.
-PIP_DISPLAY_DIVISOR: dict[str, float] = {"XAUUSD": 10.0}
+PIP_DISPLAY: dict[str, tuple[float, str]] = {
+    "XAUUSD": (10.0, "Pips"),
+    "BTCUSD": (1.0, "Points"),
+}
+DEFAULT_PIP_DISPLAY: tuple[float, str] = (1.0, "Pips")
 
 
-def _pip_divisor(symbol: SymbolInfo | None) -> float:
-    """How much to scale the raw pip count for display."""
+def _pip_display(symbol: SymbolInfo | None) -> tuple[float, str]:
+    """The divisor and label to report price movement with."""
     if symbol is None:
-        return 1.0
+        return DEFAULT_PIP_DISPLAY
     key = "".join(ch for ch in symbol.name.upper() if ch.isalnum())
-    return PIP_DISPLAY_DIVISOR.get(key, 1.0)
+    return PIP_DISPLAY.get(key, DEFAULT_PIP_DISPLAY)
 
 
 def _side(value: int) -> str:
@@ -95,6 +103,9 @@ class TradeNotifier:
         #: Why we cancelled, keyed by symbol id, consumed by the next
         #: cancellation event for that symbol. The broker never tells us.
         self._cancel_reasons: dict[int, str] = {}
+        #: Extra context for the next order-placed message, same mechanism:
+        #: the execution event cannot know we scaled the size down.
+        self._order_notes: dict[int, str] = {}
 
     # -- reason hints ------------------------------------------------------
 
@@ -104,6 +115,13 @@ class TradeNotifier:
 
     def _take_cancel_reason(self, symbol_id: int) -> str | None:
         return self._cancel_reasons.pop(symbol_id, None)
+
+    def note_order_context(self, symbol_id: int, note: str) -> None:
+        """Attach a one-line note to the next order-placed message."""
+        self._order_notes[symbol_id] = note
+
+    def _take_order_note(self, symbol_id: int) -> str | None:
+        return self._order_notes.pop(symbol_id, None)
 
     # -- entry point -------------------------------------------------------
 
@@ -177,6 +195,10 @@ class TradeNotifier:
             reward = abs(order.takeProfit - order.limitPrice)
             if risk:
                 lines.append(f"R:R:   <code>{reward / risk:.2f}</code>")
+
+        note = self._take_order_note(order.tradeData.symbolId)
+        if note:
+            lines.append(f"<i>{escape_html(note)}</i>")
         return "\n".join(lines)
 
     def _format_filled(self, event) -> str | None:
@@ -224,28 +246,33 @@ class TradeNotifier:
             else entry - exit_price
         )
         pip = symbol.pip if symbol is not None else 0.0001
-        pips = (moved / pip if pip else 0.0) / _pip_divisor(symbol)
+        divisor, unit_label = _pip_display(symbol)
+        moved_units = (moved / pip if pip else 0.0) / divisor
 
         won = net >= 0
         marker = "\U0001f7e2" if won else "\U0001f534"
         name = _name(symbol, deal.symbolId)
         position_side = "BUY" if deal.tradeSide == ProtoOATradeSide.SELL else "SELL"
 
+        # One label width for the whole block: "Points:" is wider than "Pips:".
+        def row(label: str, value: str) -> str:
+            return f"{label + ':':<8}<code>{value}</code>"
+
         lines = [
             f"{marker} <b>POSITION CLOSED</b>",
             "",
             f"<b>{name}</b>  {position_side}",
-            f"Entry: <code>{_price(entry, symbol)}</code>",
-            f"Exit:  <code>{_price(exit_price, symbol)}</code>",
-            f"Pips:  <code>{pips:+.1f}</code>",
-            f"P/L:   <code>{net:+.2f}</code>",
+            row("Entry", _price(entry, symbol)),
+            row("Exit", _price(exit_price, symbol)),
+            row(unit_label, f"{moved_units:+.1f}"),
+            row("P/L", f"{net:+.2f}"),
         ]
         if swap or commission:
             lines.append(
                 f"<i>gross {gross:+.2f}, swap {swap:+.2f}, comm {commission:+.2f}</i>"
             )
         volume = detail.closedVolume or deal.filledVolume or deal.volume
-        lines.append(f"Size:  <code>{_lots(volume, symbol)}</code> lots")
+        lines.append(row("Size", f"{_lots(volume, symbol)}") + " lots")
         return "\n".join(lines)
 
     def _format_cancelled(self, event, label: str, marker: str) -> str | None:

@@ -55,6 +55,9 @@ class SymbolInfo:
     schedule: tuple[tuple[int, int], ...] = field(default_factory=tuple)
     schedule_timezone: str = "UTC"
     trading_mode: int = TRADING_MODE_ENABLED
+    #: The asset the instrument is priced in. Needed to convert a stop distance
+    #: into the account's deposit currency before sizing.
+    quote_asset_id: int = 0
 
     def is_trading_at(self, moment: datetime) -> bool | None:
         """Is this symbol tradable at ``moment``?
@@ -112,6 +115,7 @@ class SymbolResolver:
         self._account_id = account_id
         self._by_name: dict[str, SymbolInfo] = {}
         self._catalogue: dict[str, int] = {}
+        self._quote_assets: dict[int, int] = {}
 
     async def _load_catalogue(self) -> None:
         response = await self._client.send(
@@ -124,6 +128,11 @@ class SymbolResolver:
             _normalise(s.symbolName): s.symbolId
             for s in response.symbol
             if s.enabled
+        }
+        # Only ProtoOALightSymbol carries the asset ids; the detail message
+        # returned by ProtoOASymbolByIdReq does not.
+        self._quote_assets = {
+            s.symbolId: s.quoteAssetId for s in response.symbol if s.enabled
         }
         log.info("Loaded %d tradable symbols from broker", len(self._catalogue))
 
@@ -192,6 +201,7 @@ class SymbolResolver:
             ),
             schedule_timezone=detail.scheduleTimeZone or "UTC",
             trading_mode=detail.tradingMode,
+            quote_asset_id=self._quote_assets.get(symbol_id, 0),
         )
         self._by_name[name.upper()] = info
         log.info(

@@ -161,10 +161,27 @@ Module: `bot/strategy/snr.py`.
 | **Take profit fallback** | When no zone yields a usable target — none found, wrong side of entry, or too close to clear the R:R floor — the target becomes a fixed **1:2** multiple of the stop distance. A valid QM setup is never blocked for want of a zone. `risk.fallback_take_profit()` |
 | **Invalidation** | A candle **closing** beyond the head kills the setup; the pending order is cancelled. `quasimodo.is_invalidated()` |
 | **Sizing** | `RISK_PERCENT` of balance over the stop distance, snapped to the broker volume step. `risk.position_volume()` |
+| **Currency** | The balance is in the account's *deposit* currency; the stop distance is in the symbol's *quote* currency. The risk budget is converted with a live rate before the two meet. `ctrader.conversion.CurrencyConverter` |
+| **Margin cap** | Size is capped so the position's margin stays within 80% of free margin. A tight stop otherwise sizes into an order the broker rejects. `risk.margin_capped_volume()` |
 | **R:R floor** | A zone target below 1.0 R:R is discarded in favour of the fixed 1:2 fallback, not rejected outright. `risk.MIN_RISK_REWARD` |
 
 Exit at the **first** opposing zone — this is a scalp, the trade is not held
-for a second target. The report and the Telegram message both name the source
+for a second target.
+
+### Currency and margin
+
+On a EUR account trading USD-quoted instruments, risking "2.5% of balance"
+against a stop quoted in USD is a unit mismatch. The rate comes from the broker:
+`ProtoOATrader.depositAssetId` and the symbol's `quoteAssetId` feed
+`ProtoOASymbolsForConversionReq`, whose chain is then priced from live spots.
+Without a rate the tick is skipped rather than sized on a guess — a wrong rate
+on a JPY-quoted pair would over-size by orders of magnitude.
+
+Margin is then checked before the order goes out. Because size scales inversely
+with the stop, a tight M5 QM stop can demand more margin than the account holds.
+The position is scaled down to fit 80% of free margin and the Telegram alert
+says `(Scaled for margin)`. If even the broker minimum will not fit, the setup
+is reported rather than sent. The report and the Telegram message both name the source
 of the target (`zone` or `fixed 1:2`), so it is always visible which applied.
 
 ---
