@@ -73,7 +73,10 @@ def render(report: AnalysisReport) -> str:
             f"{format_price(far, digits)}"
         )
         lines.append(f"   Stop loss   : {format_price(setup.stop_loss, digits)}")
-        lines.append(f"   Take profit : {format_price(setup.take_profit, digits)}")
+        lines.append(
+            f"   Take profit : {format_price(setup.take_profit, digits)}"
+            f"  ({setup.target_source})"
+        )
         lines.append(f"   Risk/Reward : {setup.risk_reward:.2f}")
         lines.append(f"   Volume      : {setup.volume} units")
         if setup.confluence:

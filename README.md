@@ -31,7 +31,7 @@ the full pattern-recognition pipeline, risk and execution are all implemented.
 | **HAPI 3** — structure break (BOS/MSS) | `bot/strategy/structure.py` |
 | **HAPI 4** — Quasimodo recognition | `bot/strategy/quasimodo.py` |
 | **HAPI 5** — SNR level clustering | `bot/strategy/snr.py` |
-| **HAPI 6** — stop loss / take profit / sizing | `bot/risk.py` |
+| **HAPI 6** — stop loss / take profit / sizing / 1:2 fallback | `bot/risk.py` |
 | Pipeline orchestration | `bot/strategy/engine.py` |
 | Macroeconomic news filter | `bot/news.py` |
 | Telegram notifications | `bot/telegram.py`, `bot/notifications.py` |

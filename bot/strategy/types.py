@@ -212,6 +212,8 @@ class TradeSetup:
     volume: int
     pattern: QMPattern
     target_zone: Zone | None = None
+    #: Where the take profit came from -- an SND zone, or the fixed-R fallback.
+    target_source: str = "zone"
     confluence: list[Level] = field(default_factory=list)
 
     @property

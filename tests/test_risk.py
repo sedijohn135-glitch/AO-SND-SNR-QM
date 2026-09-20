@@ -4,8 +4,10 @@ import pytest
 
 from bot.ctrader.symbols import SymbolInfo
 from bot.risk import (
+    FALLBACK_RISK_REWARD,
     RiskError,
     build_setup,
+    fallback_take_profit,
     position_volume,
     stop_loss_for,
     take_profit_for,
@@ -74,22 +76,55 @@ def test_zero_spread_still_pads_by_one_tick():
 # -- take profit ------------------------------------------------------------
 
 def test_sell_targets_the_near_edge_of_demand():
-    assert take_profit_for(Direction.SELL, demand_zone(), 2000.0, GOLD) == 1965.0
+    target, source = take_profit_for(Direction.SELL, demand_zone(), 2000.0, GOLD, 10.0)
+    assert (target, source) == (1965.0, "zone")
 
 
 def test_buy_targets_the_near_edge_of_supply():
-    assert take_profit_for(Direction.BUY, supply_zone(), 2000.0, GOLD) == 2035.0
+    target, source = take_profit_for(Direction.BUY, supply_zone(), 2000.0, GOLD, 10.0)
+    assert (target, source) == (2035.0, "zone")
 
 
-def test_missing_zone_is_rejected():
-    with pytest.raises(RiskError, match="No opposing"):
-        take_profit_for(Direction.SELL, None, 2000.0, GOLD)
+# -- the fallback: a valid setup is never blocked for want of a zone ---------
+
+def test_missing_zone_falls_back_to_a_fixed_reward_multiple():
+    target, source = take_profit_for(Direction.SELL, None, 2000.0, GOLD, 10.0)
+    assert target == 1980.0                      # 2000 - 2 x 10
+    assert source == "fixed 1:2"
 
 
-def test_zone_on_the_wrong_side_is_rejected():
+def test_buy_fallback_targets_above_entry():
+    target, source = take_profit_for(Direction.BUY, None, 2000.0, GOLD, 10.0)
+    assert target == 2020.0
+    assert source == "fixed 1:2"
+
+
+def test_zone_on_the_wrong_side_falls_back_rather_than_blocking():
     above = Zone(ZoneKind.DEMAND, 2050.0, 2045.0, "M15", NOW, base_index=1)
-    with pytest.raises(RiskError, match="not below"):
-        take_profit_for(Direction.SELL, above, 2000.0, GOLD)
+    target, source = take_profit_for(Direction.SELL, above, 2000.0, GOLD, 10.0)
+    assert target == 1980.0
+    assert source.startswith("fixed")
+
+
+def test_a_zone_too_close_to_clear_the_floor_falls_back():
+    """A 5-point target against a 10-point stop is 0.5 R:R -- use the fallback."""
+    close = Zone(ZoneKind.DEMAND, 1995.0, 1990.0, "M15", NOW, base_index=1)
+    target, source = take_profit_for(Direction.SELL, close, 2000.0, GOLD, 10.0)
+    assert target == 1980.0
+    assert source.startswith("fixed")
+
+
+def test_fallback_helper_honours_the_reward_multiple():
+    assert fallback_take_profit(Direction.SELL, 2000.0, 10.0, GOLD, 3.0) == 1970.0
+
+
+def test_fallback_needs_a_positive_stop():
+    with pytest.raises(RiskError, match="Stop distance"):
+        fallback_take_profit(Direction.SELL, 2000.0, 0.0, GOLD)
+
+
+def test_the_fallback_multiple_is_two():
+    assert FALLBACK_RISK_REWARD == 2.0
 
 
 # -- sizing -----------------------------------------------------------------
@@ -139,17 +174,46 @@ def test_build_setup_prices_a_sell():
     assert setup.volume == 900
 
 
-def test_build_setup_rejects_poor_risk_reward():
-    # Demand zone only 10 points away against a 10.45 stop -> RR < 1.
-    with pytest.raises(RiskError, match="Risk/reward"):
-        build_setup(
-            pattern=sell_pattern(),
-            symbol=GOLD,
-            spread=0.30,
-            balance=10_000.0,
-            risk_percent=1.0,
-            target_zone=Zone(ZoneKind.DEMAND, 1990.0, 1985.0, "M15", NOW, base_index=1),
-        )
+def test_build_setup_falls_back_when_the_zone_is_too_close():
+    """A zone 10 points away against a 10.45 stop is under 1 R:R."""
+    setup = build_setup(
+        pattern=sell_pattern(),
+        symbol=GOLD,
+        spread=0.30,
+        balance=10_000.0,
+        risk_percent=1.0,
+        target_zone=Zone(ZoneKind.DEMAND, 1990.0, 1985.0, "M15", NOW, base_index=1),
+    )
+    assert setup.target_source.startswith("fixed")
+    assert setup.risk_reward == pytest.approx(2.0)
+    assert setup.target_zone is None          # the rejected zone is not recorded
+
+
+def test_build_setup_with_no_zone_at_all_still_produces_a_setup():
+    setup = build_setup(
+        pattern=sell_pattern(),
+        symbol=GOLD,
+        spread=0.30,
+        balance=10_000.0,
+        risk_percent=1.0,
+        target_zone=None,
+    )
+    assert setup.take_profit < setup.entry
+    assert setup.risk_reward == pytest.approx(2.0)
+    assert setup.target_source == "fixed 1:2"
+
+
+def test_a_usable_zone_still_wins_over_the_fallback():
+    setup = build_setup(
+        pattern=sell_pattern(),
+        symbol=GOLD,
+        spread=0.30,
+        balance=10_000.0,
+        risk_percent=1.0,
+        target_zone=demand_zone(),
+    )
+    assert setup.target_source == "zone"
+    assert setup.take_profit == 1965.0
 
 
 def test_setup_zone_spans_shoulder_to_head():

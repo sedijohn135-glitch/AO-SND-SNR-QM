@@ -12,8 +12,11 @@ retuning between XAUUSD and BTCUSD:
   * **impulsive** -- body >= ``IMPULSE_ATR_MULTIPLE * ATR`` and the body fills
     at least ``IMPULSE_BODY_RATIO`` of the candle's range (a big range that is
     mostly wick is indecision, not an impulse),
-  * **basing** -- body <= ``BASE_BODY_RATIO`` of the range *and* the whole
-    range is no larger than one ATR.
+  * **basing** -- anything that is *not* impulsive and whose range stays within
+    ``BASE_MAX_RANGE_ATR * ATR``. A base is a pause, so the test is the absence
+    of a strong move rather than a strict doji shape. An earlier version
+    required each base candle to be near-bodyless, which rejected obvious
+    Drop-Base-Drop structures a trader reads instantly off the chart.
 
 Zone boundaries follow the usual proximal/distal construction, where the
 *proximal* line is the edge price meets first:
@@ -39,9 +42,14 @@ from bot.strategy.types import Direction, Zone, ZoneKind
 log = logging.getLogger(__name__)
 
 
-BASE_BODY_RATIO = 0.5
-IMPULSE_ATR_MULTIPLE = 1.0
+#: A leg counts as impulsive once its body reaches this fraction of ATR.
+#: 1.0 proved far too strict on live BTCUSD -- only ~8% of candles qualified,
+#: and a zone needs two of them, so almost no zones were ever mapped.
+IMPULSE_ATR_MULTIPLE = 0.6
+#: ...and the body must be at least this much of the candle's range.
 IMPULSE_BODY_RATIO = 0.5
+#: A base candle's range may not exceed this multiple of ATR.
+BASE_MAX_RANGE_ATR = 1.5
 MAX_BASE_CANDLES = 5
 ATR_PERIOD = 14
 
@@ -49,7 +57,8 @@ ATR_PERIOD = 14
 def _classify(frame: pd.DataFrame) -> pd.DataFrame:
     """Label every candle as impulsive up/down and/or basing."""
     body = (frame["close"] - frame["open"]).abs()
-    candle_range = (frame["high"] - frame["low"]).replace(0.0, pd.NA)
+    true_range = frame["high"] - frame["low"]
+    candle_range = true_range.replace(0.0, pd.NA)
     body_ratio = (body / candle_range).astype("float64").fillna(0.0)
     average_range = atr(frame, ATR_PERIOD)
 
@@ -58,12 +67,14 @@ def _classify(frame: pd.DataFrame) -> pd.DataFrame:
     )
     bullish = frame["close"] > frame["open"]
 
+    # A base is a pause: not a strong move, and not a wild range either.
+    basing = ~impulsive & (true_range <= BASE_MAX_RANGE_ATR * average_range)
+
     return pd.DataFrame(
         {
             "impulse_up": impulsive & bullish,
             "impulse_down": impulsive & ~bullish,
-            "basing": (body_ratio <= BASE_BODY_RATIO)
-            & ((frame["high"] - frame["low"]) <= average_range),
+            "basing": basing,
         },
         index=frame.index,
     )
@@ -172,10 +183,21 @@ def unbroken(zones: list[Zone], kind: ZoneKind | None = None) -> list[Zone]:
 
 
 def nearest_zone(
-    zones: list[Zone], kind: ZoneKind, price: float, above: bool | None = None
+    zones: list[Zone],
+    kind: ZoneKind,
+    price: float,
+    above: bool | None = None,
+    include_broken: bool = False,
 ) -> Zone | None:
-    """Closest unbroken zone of ``kind``, optionally restricted to one side."""
-    candidates = unbroken(zones, kind)
+    """Closest zone of ``kind``, optionally restricted to one side of price.
+
+    Searches the whole list, which covers every bar the caller loaded -- there
+    is no nearby-only window. ``include_broken`` widens the search to zones
+    price has already closed through: weaker targets, but real levels.
+    """
+    candidates = [
+        z for z in zones if z.kind is kind and (include_broken or not z.broken)
+    ]
     if above is True:
         candidates = [z for z in candidates if z.bottom > price]
     elif above is False:
@@ -189,12 +211,26 @@ def nearest_opposing_zone(
     zones: list[Zone],
     direction: Direction,
     price: float,
+    allow_mitigated: bool = True,
 ) -> Zone | None:
     """Closest opposing zone -- the scalp take-profit target (HAPI 6).
 
-    A SELL targets the nearest unbroken DEMAND zone *below* entry; a BUY the
-    nearest unbroken SUPPLY zone *above* it.
+    A SELL targets the nearest DEMAND zone *below* entry; a BUY the nearest
+    SUPPLY zone *above* it. Unbroken zones are preferred; if none exists
+    anywhere in the loaded history, the search widens to mitigated ones rather
+    than giving up, because a stale level still beats no target at all.
     """
-    if direction is Direction.SELL:
-        return nearest_zone(zones, ZoneKind.DEMAND, price, above=False)
-    return nearest_zone(zones, ZoneKind.SUPPLY, price, above=True)
+    kind = ZoneKind.DEMAND if direction is Direction.SELL else ZoneKind.SUPPLY
+    above = direction is Direction.BUY
+
+    found = nearest_zone(zones, kind, price, above=above)
+    if found is not None or not allow_mitigated:
+        return found
+
+    found = nearest_zone(zones, kind, price, above=above, include_broken=True)
+    if found is not None:
+        log.debug(
+            "No unbroken %s zone for the %s target; falling back to a mitigated one",
+            kind.value.lower(), direction.value,
+        )
+    return found
