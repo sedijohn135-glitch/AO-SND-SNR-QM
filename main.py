@@ -29,6 +29,7 @@ from twisted.internet import reactor  # noqa: E402
 
 from bot.config import Config, ConfigError, load_config  # noqa: E402
 from bot.ctrader.client import CTraderClient  # noqa: E402
+from bot.ctrader.conversion import CurrencyConverter  # noqa: E402
 from bot.ctrader.symbols import SymbolResolver  # noqa: E402
 from bot.ctrader.trendbars import drop_forming_bar, fetch_trendbars  # noqa: E402
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (  # noqa: E402
@@ -39,6 +40,7 @@ from bot.execution import Broker  # noqa: E402
 from bot.news import NewsFilter  # noqa: E402
 from bot.notifications import TradeNotifier  # noqa: E402
 from bot.report import render, render_blackout  # noqa: E402
+from bot.risk import MarginLimits  # noqa: E402
 from bot.scheduler import SymbolSchedule  # noqa: E402
 from bot.strategy.engine import MarketFrames, StrategyEngine  # noqa: E402
 from bot.strategy.quasimodo import is_invalidated  # noqa: E402
@@ -72,6 +74,9 @@ class TradingBot:
         self._client = CTraderClient(config)
         self._resolver = SymbolResolver(self._client, config.account_id)
         self._broker = Broker(self._client, config.account_id)
+        self._converter = CurrencyConverter(
+            self._client, config.account_id, self._broker
+        )
         self._news = NewsFilter(
             enabled=config.news_filter_enabled,
             feed_url=config.news_feed_url,
@@ -193,8 +198,23 @@ class TradingBot:
 
         await self._broker.subscribe_spots(symbol.symbol_id)
 
-        frames = await self._fetch_frames(symbol.symbol_id)
         snapshot = await self._broker.snapshot()
+
+        # The balance is held in the deposit currency while the stop distance
+        # is quoted in the symbol's. Sizing needs the live rate between them;
+        # guessing 1.0 would mis-size every order.
+        rate = await self._converter.rate(
+            symbol.quote_asset_id, snapshot.deposit_asset_id
+        )
+        if rate is None:
+            log.warning(
+                "Skipping tick: no conversion rate yet for %s (quote asset %s) "
+                "into deposit asset %s",
+                symbol.name, symbol.quote_asset_id, snapshot.deposit_asset_id,
+            )
+            return
+
+        frames = await self._fetch_frames(symbol.symbol_id)
         spread = self._broker.spread_for(symbol)
 
         engine = StrategyEngine(
@@ -204,7 +224,15 @@ class TradingBot:
             require_h4_zone_proximity=self._config.require_h4_zone_proximity,
             h4_zone_proximity_atr=self._config.h4_zone_proximity_atr,
         )
-        report = engine.analyse(frames, spread=spread, balance=snapshot.balance)
+        report = engine.analyse(
+            frames,
+            spread=spread,
+            balance=snapshot.balance,
+            quote_to_deposit_rate=rate,
+            margin=MarginLimits(
+                free_margin=snapshot.free_margin, leverage=snapshot.leverage
+            ),
+        )
         print(render(report), flush=True)
 
         await self._enforce_invalidation(symbol, frames)
@@ -219,6 +247,10 @@ class TradingBot:
         if not self._within_exposure_limits(snapshot, symbol.symbol_id):
             return
 
+        if report.setup.scaled_for_margin:
+            self._trade_notifier.note_order_context(
+                symbol.symbol_id, "(Scaled for margin)"
+            )
         await self._broker.place_limit_order(
             report.setup, symbol, expiry_minutes=self._config.order_expiry_minutes
         )

@@ -65,8 +65,23 @@ class Quote:
 @dataclass
 class AccountSnapshot:
     balance: float
+    #: Asset the account is held in -- not necessarily the instrument's quote.
+    deposit_asset_id: int = 0
+    #: Account leverage as a plain multiple, e.g. 20.0 for 1:20.
+    leverage: float = 0.0
+    #: Margin already committed to open positions, in the deposit currency.
+    used_margin: float = 0.0
     open_positions: list = field(default_factory=list)
     pending_orders: list = field(default_factory=list)
+
+    @property
+    def free_margin(self) -> float:
+        """Balance not already tied up as margin.
+
+        Floating profit is not included: the Open API does not report unrealised
+        P&L on the trader record, and leaving it out is the conservative side.
+        """
+        return max(self.balance - self.used_margin, 0.0)
 
     def positions_for(self, symbol_id: int) -> list:
         return [p for p in self.open_positions if p.tradeData.symbolId == symbol_id]
@@ -132,9 +147,18 @@ class Broker:
         reconcile = await self._client.send(
             ProtoOAReconcileReq(ctidTraderAccountId=self._account_id)
         )
+        positions = list(reconcile.position)
+        used_margin = sum(
+            p.usedMargin / (10 ** (p.moneyDigits or money_digits))
+            for p in positions
+            if p.usedMargin
+        )
         return AccountSnapshot(
             balance=balance,
-            open_positions=list(reconcile.position),
+            deposit_asset_id=trader.depositAssetId,
+            leverage=(trader.leverageInCents or 0) / 100.0,
+            used_margin=used_margin,
+            open_positions=positions,
             pending_orders=list(reconcile.order),
         )
 

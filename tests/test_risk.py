@@ -5,7 +5,10 @@ import pytest
 from bot.ctrader.symbols import SymbolInfo
 from bot.risk import (
     FALLBACK_RISK_REWARD,
+    MarginLimits,
     RiskError,
+    margin_capped_volume,
+    required_margin,
     build_setup,
     fallback_take_profit,
     position_volume,
@@ -227,3 +230,150 @@ def test_setup_zone_spans_shoulder_to_head():
     )
     assert setup.zone_near == 2000.0
     assert setup.zone_far == 2010.0
+
+
+# -- currency conversion -----------------------------------------------------
+#
+# The live account is held in EUR while both instruments are quoted in USD.
+# Both broker order tickets imply the same USD->EUR rate.
+
+USD_TO_EUR = 0.8707
+BTC = SymbolInfo(
+    symbol_id=22395, name="BTCUSD", digits=2, pip_position=2,
+    lot_size=100, min_volume=1, step_volume=1, max_volume=100_000,
+)
+
+
+def test_our_model_reproduces_the_broker_ticket_for_bitcoin():
+    """0.1 lot BTCUSD over a 300.81 stop shows -26.19 EUR on the ticket."""
+    units = BTC.volume_to_lots(10) * 1.0          # 0.1 lot = 0.1 BTC
+    assert round(units * 300.81 * USD_TO_EUR, 2) == 26.19
+
+
+def test_our_model_reproduces_the_broker_ticket_for_gold():
+    """0.1 lot XAUUSD over a 5.01 stop shows -43.62 EUR on the ticket."""
+    units = GOLD.volume_to_lots(1_000) * 100.0    # 0.1 lot = 10 oz
+    assert round(units * 5.01 * USD_TO_EUR, 2) == 43.62
+
+
+def test_conversion_makes_the_realised_risk_match_the_target():
+    """A balance large enough that the 0.01-lot volume step is negligible."""
+    balance, risk_pct, stop = 10_000.0, 2.5, 300.81
+    volume = position_volume(
+        balance, risk_pct, stop, BTC, quote_to_deposit_rate=USD_TO_EUR
+    )
+    loss_eur = (volume / 100.0) * stop * USD_TO_EUR
+    assert loss_eur == pytest.approx(balance * risk_pct / 100, rel=0.01)
+
+
+def test_without_conversion_the_risk_falls_short_by_the_fx_rate():
+    """The bug this fixes: a EUR budget divided by a USD stop under-sizes."""
+    balance, risk_pct, stop = 10_000.0, 2.5, 300.81
+    volume = position_volume(balance, risk_pct, stop, BTC)   # rate defaults to 1.0
+    loss_eur = (volume / 100.0) * stop * USD_TO_EUR
+    assert loss_eur == pytest.approx(250.0 * USD_TO_EUR, rel=0.01)
+
+
+def test_conversion_sizes_larger_than_no_conversion():
+    """Converting EUR into USD buys more units, since one EUR is >1 USD."""
+    args = (10_000.0, 2.5, 300.81, BTC)
+    assert position_volume(*args, quote_to_deposit_rate=USD_TO_EUR) > position_volume(*args)
+
+
+def test_a_rate_of_one_leaves_sizing_unchanged():
+    assert position_volume(10_000.0, 1.0, 10.45, GOLD) == position_volume(
+        10_000.0, 1.0, 10.45, GOLD, quote_to_deposit_rate=1.0
+    )
+
+
+def test_a_non_positive_rate_is_rejected():
+    with pytest.raises(RiskError, match="conversion rate"):
+        position_volume(1_000.0, 2.5, 300.0, BTC, quote_to_deposit_rate=0.0)
+
+
+# -- margin cap --------------------------------------------------------------
+
+def test_margin_cap_follows_leverage_and_the_usage_limit():
+    limits = MarginLimits(free_margin=1_000.0, leverage=20.0, usage_limit=0.8)
+    volume = margin_capped_volume(80_486.0, BTC, limits, USD_TO_EUR)
+    margin = required_margin(volume, 80_486.0, BTC, 20.0, USD_TO_EUR)
+    assert margin <= 1_000.0 * 0.8
+
+
+def test_more_leverage_allows_more_size():
+    low = margin_capped_volume(
+        80_486.0, BTC, MarginLimits(1_000.0, 20.0), USD_TO_EUR
+    )
+    high = margin_capped_volume(
+        80_486.0, BTC, MarginLimits(1_000.0, 100.0), USD_TO_EUR
+    )
+    assert high > low
+
+
+def test_no_leverage_information_means_no_cap():
+    assert margin_capped_volume(
+        80_486.0, BTC, MarginLimits(1_000.0, 0.0), USD_TO_EUR
+    ) == BTC.max_volume
+
+
+def test_a_tight_stop_is_scaled_down_to_fit_margin():
+    """The NOT_ENOUGH_MONEY trap: risk sizing wants more than margin allows."""
+    pattern = QMPattern(
+        direction=Direction.BUY, timeframe="M5",
+        left_shoulder=Swing(10, NOW, 80_486.41, SwingKind.LOW, "M5"),
+        head=Swing(20, NOW, 80_412.34, SwingKind.LOW, "M5"),
+        breakout=Swing(30, NOW, 80_800.0, SwingKind.HIGH, "M5"),
+    )
+    uncapped = build_setup(
+        pattern=pattern, symbol=BTC, spread=12.0, balance=1_000.0,
+        risk_percent=2.5, target_zone=None, quote_to_deposit_rate=USD_TO_EUR,
+    )
+    capped = build_setup(
+        pattern=pattern, symbol=BTC, spread=12.0, balance=1_000.0,
+        risk_percent=2.5, target_zone=None, quote_to_deposit_rate=USD_TO_EUR,
+        margin=MarginLimits(free_margin=1_000.0, leverage=20.0),
+    )
+    assert capped.volume < uncapped.volume
+    assert capped.scaled_for_margin
+    assert not uncapped.scaled_for_margin
+
+
+def test_generous_leverage_leaves_the_size_alone():
+    pattern = QMPattern(
+        direction=Direction.BUY, timeframe="M5",
+        left_shoulder=Swing(10, NOW, 80_486.41, SwingKind.LOW, "M5"),
+        head=Swing(20, NOW, 80_412.34, SwingKind.LOW, "M5"),
+        breakout=Swing(30, NOW, 80_800.0, SwingKind.HIGH, "M5"),
+    )
+    setup = build_setup(
+        pattern=pattern, symbol=BTC, spread=12.0, balance=1_000.0,
+        risk_percent=2.5, target_zone=None, quote_to_deposit_rate=USD_TO_EUR,
+        margin=MarginLimits(free_margin=1_000.0, leverage=500.0),
+    )
+    assert not setup.scaled_for_margin
+
+
+def test_margin_too_small_for_the_broker_minimum_is_reported():
+    pattern = QMPattern(
+        direction=Direction.BUY, timeframe="M5",
+        left_shoulder=Swing(10, NOW, 80_486.41, SwingKind.LOW, "M5"),
+        head=Swing(20, NOW, 80_412.34, SwingKind.LOW, "M5"),
+        breakout=Swing(30, NOW, 80_800.0, SwingKind.HIGH, "M5"),
+    )
+    with pytest.raises(RiskError, match="cannot cover even the broker minimum"):
+        build_setup(
+            pattern=pattern, symbol=BTC, spread=12.0, balance=1_000.0,
+            risk_percent=2.5, target_zone=None, quote_to_deposit_rate=USD_TO_EUR,
+            margin=MarginLimits(free_margin=5.0, leverage=2.0),
+        )
+
+
+def test_used_margin_reduces_what_is_available():
+    from bot.execution import AccountSnapshot
+    snapshot = AccountSnapshot(balance=1_000.0, used_margin=400.0)
+    assert snapshot.free_margin == 600.0
+
+
+def test_free_margin_never_goes_negative():
+    from bot.execution import AccountSnapshot
+    assert AccountSnapshot(balance=100.0, used_margin=250.0).free_margin == 0.0

@@ -15,7 +15,7 @@ import pandas as pd
 
 from bot.ctrader.symbols import SymbolInfo
 from bot.indicators import atr, with_ao
-from bot.risk import RiskError, build_setup
+from bot.risk import MarginLimits, RiskError, build_setup
 from bot.strategy import divergence as divergence_mod
 from bot.strategy import quasimodo as qm_mod
 from bot.strategy import snd as snd_mod
@@ -75,6 +75,8 @@ class StrategyEngine:
         frames: MarketFrames,
         spread: float,
         balance: float,
+        quote_to_deposit_rate: float = 1.0,
+        margin: MarginLimits | None = None,
     ) -> AnalysisReport:
         report = AnalysisReport(
             symbol=self._symbol.name,
@@ -199,6 +201,8 @@ class StrategyEngine:
                 target_zone=target_zone,
                 fixed_lots=self._fixed_volume_lots,
                 confluence=confluence,
+                quote_to_deposit_rate=quote_to_deposit_rate,
+                margin=margin,
             )
         except RiskError as exc:
             report.setup_status = SetupStatus.BLOCKED
@@ -214,6 +218,11 @@ class StrategyEngine:
                 f"No usable opposing zone on M15 or M5 - take profit set at "
                 f"{setup.target_source} of the stop distance."
             )
+        if setup.scaled_for_margin:
+            report.notes.append(
+                "Position scaled down to fit available margin."
+            )
+
         report.setup = setup
         report.setup_status = (
             SetupStatus.VALID
