@@ -18,6 +18,7 @@ def env(monkeypatch):
         "CTRADER_REFRESH_TOKEN", "LOOP_INTERVAL_SECONDS",
         "GOLD_SESSION_TIMEZONE", "GOLD_SESSION_OPEN", "GOLD_SESSION_CLOSE",
         "REQUIRE_H4_ZONE_PROXIMITY", "H4_ZONE_PROXIMITY_ATR",
+        "ALLOW_COUNTER_TREND",
         "NEWS_FILTER_ENABLED", "NEWS_FEED_URL", "NEWS_CURRENCIES",
         "NEWS_MIN_IMPACT", "NEWS_BLACKOUT_BEFORE_MINUTES",
         "NEWS_BLACKOUT_AFTER_MINUTES", "NEWS_REFRESH_MINUTES",
@@ -236,3 +237,18 @@ def test_bot_token_never_appears_in_the_redacted_snapshot(env):
     redacted = load_config().redacted()
     assert redacted["telegram_bot_token"] == "***set***"
     assert "super-secret" not in str(redacted)
+
+
+# -- counter-trend -----------------------------------------------------------
+
+def test_counter_trend_is_disabled_by_default(env):
+    assert load_config().allow_counter_trend is False
+
+
+def test_counter_trend_can_be_enabled(env):
+    env.setenv("ALLOW_COUNTER_TREND", "true")
+    assert load_config().allow_counter_trend is True
+
+
+def test_counter_trend_appears_in_the_redacted_snapshot(env):
+    assert load_config().redacted()["allow_counter_trend"] is False

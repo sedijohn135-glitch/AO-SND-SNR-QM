@@ -53,6 +53,29 @@ class MarketFrames:
         )
 
 
+@dataclass(frozen=True)
+class _MarketContext:
+    """Per-tick data shared by both directional attempts.
+
+    Zones and levels are direction-independent, so they are mapped once rather
+    than recomputed when a counter-trend attempt follows the aligned one.
+    """
+
+    frames: MarketFrames
+    m15: pd.DataFrame
+    m5: pd.DataFrame
+    last_price: float
+    h4_zones: list
+    m15_zones: list
+    m5_zones: list
+    m15_levels: list
+    m5_levels: list
+    spread: float
+    balance: float
+    quote_to_deposit_rate: float
+    margin: MarginLimits | None
+
+
 class StrategyEngine:
     """Runs one full analysis pass and returns a report."""
 
@@ -63,12 +86,14 @@ class StrategyEngine:
         fixed_volume_lots: float = 0.0,
         require_h4_zone_proximity: bool = True,
         h4_zone_proximity_atr: float = 1.5,
+        allow_counter_trend: bool = False,
     ) -> None:
         self._symbol = symbol
         self._risk_percent = risk_percent
         self._fixed_volume_lots = fixed_volume_lots
         self._require_h4_zone_proximity = require_h4_zone_proximity
         self._h4_zone_proximity_atr = h4_zone_proximity_atr
+        self._allow_counter_trend = allow_counter_trend
 
     def analyse(
         self,
@@ -102,16 +127,90 @@ class StrategyEngine:
         report.h4_notes = bias_notes
 
         if bias is TrendBias.RANGING:
-            report.notes.append("H4 is ranging - no directional permission. Standing down.")
+            report.notes.append(
+                "H4 is ranging - no directional permission. Standing down. "
+                "Counter-trend trading still needs a trend to trade against."
+            )
             return report
 
-        direction = Direction.SELL if bias is TrendBias.BEARISH else Direction.BUY
-        report.notes.append(f"H4 {bias.value} -> only {direction.value} setups allowed.")
+        aligned = Direction.SELL if bias is TrendBias.BEARISH else Direction.BUY
 
-        # HAPI 1 also asks *where* price is: a bearish H4 wants price at Supply,
-        # a bullish H4 wants price at Demand.
-        h4_zones = snd_mod.find_zones(frames.h4, "H4")
-        note, at_zone = self._h4_zone_check(h4_zones, direction, last_price, frames.h4)
+        # Zones and levels do not depend on the direction, so map them once
+        # and share them across both attempts.
+        context = _MarketContext(
+            frames=frames,
+            m15=m15,
+            m5=m5,
+            last_price=last_price,
+            h4_zones=snd_mod.find_zones(frames.h4, "H4"),
+            m15_zones=snd_mod.find_zones(frames.m15, "M15"),
+            m5_zones=snd_mod.find_zones(frames.m5, "M5"),
+            m15_levels=snr_mod.find_levels(frames.m15, "M15"),
+            m5_levels=snr_mod.find_levels(frames.m5, "M5"),
+            spread=spread,
+            balance=balance,
+            quote_to_deposit_rate=quote_to_deposit_rate,
+            margin=margin,
+        )
+
+        directions = [aligned]
+        if self._allow_counter_trend:
+            directions.append(aligned.opposite)
+
+        attempts: list[AnalysisReport] = []
+        for direction in directions:
+            attempt = self._evaluate(
+                direction=direction,
+                counter_trend=direction is not aligned,
+                bias=bias,
+                bias_notes=bias_notes,
+                ctx=context,
+            )
+            if attempt.setup is not None:
+                return attempt
+            attempts.append(attempt)
+
+        # Nothing executable either way: report the trend-aligned attempt,
+        # which is the one the strategy is primarily about, but carry over why
+        # the counter-trend pass stood down so it is not silently invisible.
+        primary = attempts[0]
+        for extra in attempts[1:]:
+            reason = extra.notes[-1] if extra.notes else "no setup"
+            primary.notes.append(f"Counter-trend pass: {reason}")
+        return primary
+
+    def _evaluate(
+        self,
+        direction: Direction,
+        counter_trend: bool,
+        bias: TrendBias,
+        bias_notes: str,
+        ctx: "_MarketContext",
+    ) -> AnalysisReport:
+        """Run the pipeline for one direction."""
+        report = AnalysisReport(
+            symbol=self._symbol.name,
+            generated_at=datetime.now(timezone.utc),
+            price_digits=self._symbol.digits,
+            h4_trend=bias,
+            h4_notes=bias_notes,
+            counter_trend=counter_trend,
+        )
+        if counter_trend:
+            report.notes.append(
+                f"COUNTER-TREND: looking for {direction.value} against a "
+                f"{bias.value} H4. Higher risk by design."
+            )
+        else:
+            report.notes.append(
+                f"H4 {bias.value} -> only {direction.value} setups allowed."
+            )
+
+        # HAPI 1 also asks *where* price is: a sell wants price at Supply, a
+        # buy at Demand -- which holds whichever way the H4 is pointing.
+        note, at_zone = self._h4_zone_check(
+            ctx.h4_zones, direction, ctx.last_price, ctx.frames.h4
+        )
         report.notes.append(note)
         if self._require_h4_zone_proximity and not at_zone:
             report.setup_status = SetupStatus.BLOCKED
@@ -121,28 +220,32 @@ class StrategyEngine:
             )
             return report
 
-        # -- HAPI 2: AO divergence (early warning, never a trigger) --------
-        for timeframe, frame in (("M15", m15), ("M5", m5)):
+        # -- HAPI 2: AO divergence -----------------------------------------
+        for timeframe, frame in (("M15", ctx.m15), ("M5", ctx.m5)):
             found = divergence_mod.detect_divergence(frame, direction, timeframe)
             if found is not None:
                 report.divergence = found
                 break
+
         if report.divergence is None:
             report.divergence_notes = (
-                f"No {direction.value.lower()}-side AO divergence on M15 or M5 "
-                "(a warning only, not required for entry)."
+                f"No {direction.value.lower()}-side AO divergence on M15 or M5."
             )
+            # With the trend, divergence is a warning only. Against it, the
+            # divergence is the entire justification for the trade.
+            if counter_trend:
+                report.setup_status = SetupStatus.BLOCKED
+                report.notes.append(
+                    "Counter-trend requires AO divergence to justify fighting "
+                    "the H4 trend; none found. Standing down."
+                )
+                return report
 
         # -- HAPI 3: structure break -- the hard gate ----------------------
-        m15_zones = snd_mod.find_zones(frames.m15, "M15")
-        m5_zones = snd_mod.find_zones(frames.m5, "M5")
-        m5_levels = snr_mod.find_levels(frames.m5, "M5")
-        m15_levels = snr_mod.find_levels(frames.m15, "M15")
-
         structure_break = structure_mod.detect_structure_break(
-            frames.m5, direction, m5_zones, m5_levels, "M5"
+            ctx.frames.m5, direction, ctx.m5_zones, ctx.m5_levels, "M5"
         ) or structure_mod.detect_structure_break(
-            frames.m15, direction, m15_zones, m15_levels, "M15"
+            ctx.frames.m15, direction, ctx.m15_zones, ctx.m15_levels, "M15"
         )
         report.structure_break = structure_break
         if structure_break is None:
@@ -153,7 +256,7 @@ class StrategyEngine:
             return report
 
         # -- HAPI 4: Quasimodo ---------------------------------------------
-        pattern = qm_mod.find_quasimodo(frames.m5, direction, "M5")
+        pattern = qm_mod.find_quasimodo(ctx.frames.m5, direction, "M5")
         if pattern is None:
             report.setup_status = SetupStatus.NONE
             report.notes.append(
@@ -163,14 +266,18 @@ class StrategyEngine:
             return report
 
         report.pattern = pattern
-        if qm_mod.is_invalidated(pattern, frames.m5.iloc[pattern.head.index + 1:]):
+        if qm_mod.is_invalidated(
+            pattern, ctx.frames.m5.iloc[pattern.head.index + 1:]
+        ):
             report.setup_status = SetupStatus.BLOCKED
             report.notes.append("QM invalidated: a candle closed beyond the head.")
             return report
 
         # -- HAPI 5: SNR confluence ----------------------------------------
-        tolerance = snr_mod.level_tolerance(frames.m5)
-        confluence = snr_mod.confluence_at(m5_levels, pattern.entry_price, tolerance)
+        tolerance = snr_mod.level_tolerance(ctx.frames.m5)
+        confluence = snr_mod.confluence_at(
+            ctx.m5_levels, pattern.entry_price, tolerance
+        )
         if confluence:
             report.notes.append(
                 f"Left shoulder aligns with {len(confluence)} historical "
@@ -182,12 +289,12 @@ class StrategyEngine:
         # back to a fixed reward multiple if neither yields a usable target, so
         # a valid QM setup is never abandoned for want of a zone.
         target_zone = snd_mod.nearest_opposing_zone(
-            m15_zones, direction, pattern.entry_price
+            ctx.m15_zones, direction, pattern.entry_price
         )
         target_timeframe = "M15"
         if target_zone is None:
             target_zone = snd_mod.nearest_opposing_zone(
-                m5_zones, direction, pattern.entry_price
+                ctx.m5_zones, direction, pattern.entry_price
             )
             target_timeframe = "M5"
 
@@ -195,14 +302,15 @@ class StrategyEngine:
             setup: TradeSetup = build_setup(
                 pattern=pattern,
                 symbol=self._symbol,
-                spread=spread,
-                balance=balance,
+                spread=ctx.spread,
+                balance=ctx.balance,
                 risk_percent=self._risk_percent,
                 target_zone=target_zone,
                 fixed_lots=self._fixed_volume_lots,
                 confluence=confluence,
-                quote_to_deposit_rate=quote_to_deposit_rate,
-                margin=margin,
+                quote_to_deposit_rate=ctx.quote_to_deposit_rate,
+                margin=ctx.margin,
+                counter_trend=counter_trend,
             )
         except RiskError as exc:
             report.setup_status = SetupStatus.BLOCKED
@@ -219,14 +327,12 @@ class StrategyEngine:
                 f"{setup.target_source} of the stop distance."
             )
         if setup.scaled_for_margin:
-            report.notes.append(
-                "Position scaled down to fit available margin."
-            )
+            report.notes.append("Position scaled down to fit available margin.")
 
         report.setup = setup
         report.setup_status = (
             SetupStatus.VALID
-            if _price_outside_zone(direction, last_price, setup)
+            if _price_outside_zone(direction, ctx.last_price, setup)
             else SetupStatus.WAITING_RETEST
         )
         if report.setup_status is SetupStatus.WAITING_RETEST:

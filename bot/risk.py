@@ -224,6 +224,7 @@ def build_setup(
     confluence=None,
     quote_to_deposit_rate: float = 1.0,
     margin: MarginLimits | None = None,
+    counter_trend: bool = False,
 ) -> TradeSetup:
     """Turn a QM pattern into a fully priced, sized order."""
     entry = symbol.round_price(pattern.entry_price)
@@ -272,6 +273,7 @@ def build_setup(
         target_zone=target_zone if target_source == "zone" else None,
         target_source=target_source,
         scaled_for_margin=scaled_for_margin,
+        counter_trend=counter_trend,
         confluence=list(confluence or []),
     )
 

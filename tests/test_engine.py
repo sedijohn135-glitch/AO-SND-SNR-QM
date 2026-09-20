@@ -7,7 +7,9 @@ from bot.report import render
 from bot.strategy.engine import MarketFrames, StrategyEngine
 from bot.strategy.types import Direction, SetupStatus, TrendBias
 from tests.factories import (
+    bearish_divergence_path,
     candles_from_path,
+    momentum_confirms_path,
     impulse_base_impulse,
     sell_qm_path,
     warmup,
@@ -162,3 +164,116 @@ def test_h4_zone_gate_can_be_disabled():
         aligned_frames(), spread=0.30, balance=10_000.0
     )
     assert report.setup_status is SetupStatus.VALID
+
+
+# -- counter-trend scalps ----------------------------------------------------
+
+def bullish_h4():
+    return candles_from_path(
+        zigzag(
+            warmup(100.0, cycles=6, bars=6)
+            + [(110, 8), (105, 6), (120, 8), (115, 6), (130, 8)],
+            100.0,
+        ),
+        freq="4h",
+    )
+
+
+def counter_trend_frames(m15_path=None):
+    """Bullish H4 with a SELL QM on M5 -- a setup only reachable against trend."""
+    return MarketFrames(
+        h4=bullish_h4(),
+        m15=candles_from_path(m15_path or bearish_divergence_path(), freq="15min"),
+        m5=candles_from_path(sell_qm_path()),
+    )
+
+
+def counter_engine(allow: bool):
+    return StrategyEngine(
+        symbol=GOLD,
+        risk_percent=1.0,
+        require_h4_zone_proximity=False,
+        allow_counter_trend=allow,
+    )
+
+
+def test_the_fixture_really_is_a_bullish_h4():
+    report = counter_engine(False).analyse(
+        counter_trend_frames(), spread=0.30, balance=10_000.0
+    )
+    assert report.h4_trend is TrendBias.BULLISH
+
+
+def test_counter_trend_is_off_by_default():
+    """A SELL under a bullish H4 must not appear unless explicitly enabled."""
+    report = counter_engine(False).analyse(
+        counter_trend_frames(), spread=0.30, balance=10_000.0
+    )
+    assert report.setup is None
+    assert not report.counter_trend
+
+
+def test_enabling_it_finds_the_sell_against_a_bullish_h4():
+    report = counter_engine(True).analyse(
+        counter_trend_frames(), spread=0.30, balance=10_000.0
+    )
+    assert report.setup_status is SetupStatus.VALID
+    assert report.setup.direction is Direction.SELL
+    assert report.h4_trend is TrendBias.BULLISH
+
+
+def test_a_counter_trend_setup_is_flagged():
+    report = counter_engine(True).analyse(
+        counter_trend_frames(), spread=0.30, balance=10_000.0
+    )
+    assert report.counter_trend
+    assert report.setup.counter_trend
+    assert any("COUNTER-TREND" in note for note in report.notes)
+
+
+def test_counter_trend_requires_ao_divergence():
+    """Against the trend, divergence is the whole justification."""
+    report = counter_engine(True).analyse(
+        counter_trend_frames(momentum_confirms_path()),
+        spread=0.30, balance=10_000.0,
+    )
+    assert report.setup is None
+
+
+def test_the_reason_the_counter_pass_stood_down_is_reported():
+    report = counter_engine(True).analyse(
+        counter_trend_frames(momentum_confirms_path()),
+        spread=0.30, balance=10_000.0,
+    )
+    assert any("Counter-trend pass:" in note for note in report.notes)
+    assert any("divergence" in note for note in report.notes)
+
+
+def test_the_trend_aligned_direction_is_preferred():
+    """With a valid aligned setup, the counter pass must not take over."""
+    report = StrategyEngine(
+        symbol=GOLD, risk_percent=1.0, allow_counter_trend=True
+    ).analyse(aligned_frames(), spread=0.30, balance=10_000.0)
+    assert report.setup_status is SetupStatus.VALID
+    assert report.setup.direction is Direction.SELL      # H4 is bearish here
+    assert not report.counter_trend
+    assert not report.setup.counter_trend
+
+
+def test_a_ranging_h4_still_blocks_both_directions():
+    """Counter-trend needs a trend to trade against."""
+    frames = counter_trend_frames()
+    frames.h4 = candles_from_path(
+        zigzag([(110, 6), (90, 6), (112, 6), (88, 6), (111, 6)] * 3, 100.0), freq="4h"
+    )
+    report = counter_engine(True).analyse(frames, spread=0.30, balance=10_000.0)
+    assert report.setup is None
+    assert any("ranging" in note for note in report.notes)
+
+
+def test_counter_trend_still_respects_the_structure_gate():
+    """Enabling it bypasses the H4 filter only -- not HAPI 3."""
+    frames = counter_trend_frames()
+    frames.m5 = candles_from_path([100.0 + i * 0.01 for i in range(80)])
+    report = counter_engine(True).analyse(frames, spread=0.30, balance=10_000.0)
+    assert report.setup is None

@@ -28,6 +28,27 @@ A `RANGING` H4 blocks both directions — the bot stands down rather than
 guessing. Requiring *both* the highs and the lows to agree keeps the bot out of
 expanding ranges, where a higher high sits beside a lower low.
 
+### Counter-trend scalps (`ALLOW_COUNTER_TREND`, default off)
+
+Danial takes counter-trend scalps when the M15 AO divergence and M5 QM are
+exceptionally clear, noting they carry higher risk. Setting
+`ALLOW_COUNTER_TREND=true` permits the opposite direction — a SELL under a
+bullish H4, or a BUY under a bearish one.
+
+Two safeguards stay:
+
+- **AO divergence becomes mandatory.** With the trend it is a warning (HAPI 2);
+  against the trend it is the entire justification, so a counter-trend setup
+  without it is rejected outright.
+- **A ranging H4 still blocks both directions** — counter-trend trading needs a
+  trend to trade against.
+
+The trend-aligned direction is always evaluated first and wins if it produces
+anything; the counter-trend pass only runs when it does not. Everything
+downstream — structure break, QM, risk — applies unchanged. Such trades carry
+`(Counter-Trend)` in the Telegram alert and `[COUNTER-TREND PASS]` in the
+report.
+
 The rule also says *where* price must be: a bearish H4 wants price at Supply, a
 bullish H4 at Demand. `REQUIRE_H4_ZONE_PROXIMITY` (default **on**) enforces
 this — price must sit inside the required zone, or within
@@ -266,6 +287,8 @@ News blackout active?                yes ──► cancel pendings, skip the tic
    │                                         (open positions untouched)
    ▼
 H4 bias ──► direction permitted?      no ──► stand down
+   │                                    (ALLOW_COUNTER_TREND retries the
+   │                                     opposite way, divergence required)
    │
    ▼
 Price at the required H4 zone?        no ──► stand down (gate is configurable)

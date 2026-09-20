@@ -124,6 +124,11 @@ class TradingBot:
         if not self._config.enable_trading:
             log.warning("ENABLE_TRADING=false -- analysis only, no orders will be sent")
         log.info("Telegram notifications: %s", self._telegram.describe())
+        if self._config.allow_counter_trend:
+            log.warning(
+                "ALLOW_COUNTER_TREND=true -- scalps against the H4 bias are "
+                "permitted when AO divergence supports them"
+            )
 
         self._task = asyncio.current_task()
         await self._client.start()
@@ -142,7 +147,9 @@ class TradingBot:
             f"Account: <b>{mode}</b> {self._config.account_id}\n"
             f"Trading: <b>{trading}</b>\n"
             f"Risk:    <code>{self._config.risk_percent}%</code> per trade\n"
-            f"News filter: {'on' if self._config.news_filter_enabled else 'off'}"
+            f"News filter: {'on' if self._config.news_filter_enabled else 'off'}\n"
+            f"Counter-trend: "
+            f"{'ON' if self._config.allow_counter_trend else 'off'}"
         )
 
     def request_stop(self) -> None:
@@ -223,6 +230,7 @@ class TradingBot:
             fixed_volume_lots=self._config.fixed_volume_lots,
             require_h4_zone_proximity=self._config.require_h4_zone_proximity,
             h4_zone_proximity_atr=self._config.h4_zone_proximity_atr,
+            allow_counter_trend=self._config.allow_counter_trend,
         )
         report = engine.analyse(
             frames,
@@ -247,10 +255,13 @@ class TradingBot:
         if not self._within_exposure_limits(snapshot, symbol.symbol_id):
             return
 
+        tags = []
+        if report.setup.counter_trend:
+            tags.append("(Counter-Trend)")
         if report.setup.scaled_for_margin:
-            self._trade_notifier.note_order_context(
-                symbol.symbol_id, "(Scaled for margin)"
-            )
+            tags.append("(Scaled for margin)")
+        if tags:
+            self._trade_notifier.note_order_context(symbol.symbol_id, " ".join(tags))
         await self._broker.place_limit_order(
             report.setup, symbol, expiry_minutes=self._config.order_expiry_minutes
         )

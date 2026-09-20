@@ -89,3 +89,30 @@ def test_waiting_retest_status_is_explained():
 def test_notes_are_appended():
     report = AnalysisReport(symbol="XAUUSD", generated_at=NOW, notes=["zone stale"])
     assert "zone stale" in render(report)
+
+
+# -- counter-trend markers ---------------------------------------------------
+
+def test_a_counter_trend_pass_is_marked_in_the_header():
+    report = AnalysisReport(symbol="XAUUSD", generated_at=NOW, counter_trend=True)
+    assert "[COUNTER-TREND PASS]" in render(report)
+
+
+def test_a_normal_pass_carries_no_marker():
+    report = AnalysisReport(symbol="XAUUSD", generated_at=NOW)
+    assert "COUNTER-TREND" not in render(report)
+
+
+def test_a_counter_trend_setup_is_marked_on_the_direction_line():
+    setup = TradeSetup(
+        direction=Direction.SELL, symbol="XAUUSD", entry=2000.0,
+        zone_near=2000.0, zone_far=2010.0, stop_loss=2010.45,
+        take_profit=1965.0, volume=900, pattern=make_pattern(),
+        counter_trend=True,
+    )
+    report = AnalysisReport(
+        symbol="XAUUSD", generated_at=NOW, setup_status=SetupStatus.VALID,
+        pattern=make_pattern(), setup=setup, counter_trend=True,
+    )
+    text = render(report)
+    assert "SELL LIMIT  (counter-trend)" in text

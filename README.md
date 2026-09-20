@@ -215,6 +215,7 @@ cp .env.example .env
 | `GOLD_SESSION_OPEN` | no | `SUN 18:00` | Session open, in the market zone |
 | `GOLD_SESSION_CLOSE` | no | `FRI 17:00` | Session close, in the market zone |
 | `REQUIRE_H4_ZONE_PROXIMITY` | no | `true` | Require price to be at the H4 zone (HAPI 1) |
+| `ALLOW_COUNTER_TREND` | no | `false` | Allow scalps against the H4 bias |
 | `H4_ZONE_PROXIMITY_ATR` | no | `1.5` | How near "at the zone" means, in H4 ATRs |
 | `NEWS_FILTER_ENABLED` | no | `true` | Master switch for the news filter |
 | `NEWS_FEED_URL` | no | Forex Factory weekly JSON | Calendar source |
