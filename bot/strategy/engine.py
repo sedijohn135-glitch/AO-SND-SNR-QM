@@ -176,6 +176,9 @@ class StrategyEngine:
             )
 
         # -- HAPI 6: risk management ---------------------------------------
+        # Search the whole loaded history on M15, then M5. build_setup falls
+        # back to a fixed reward multiple if neither yields a usable target, so
+        # a valid QM setup is never abandoned for want of a zone.
         target_zone = snd_mod.nearest_opposing_zone(
             m15_zones, direction, pattern.entry_price
         )
@@ -202,7 +205,15 @@ class StrategyEngine:
             report.notes.append(f"Risk check failed: {exc}")
             return report
 
-        report.notes.append(f"Take profit taken from the nearest {target_timeframe} zone.")
+        if setup.target_source == "zone":
+            report.notes.append(
+                f"Take profit taken from the nearest {target_timeframe} zone."
+            )
+        else:
+            report.notes.append(
+                f"No usable opposing zone on M15 or M5 - take profit set at "
+                f"{setup.target_source} of the stop distance."
+            )
         report.setup = setup
         report.setup_status = (
             SetupStatus.VALID

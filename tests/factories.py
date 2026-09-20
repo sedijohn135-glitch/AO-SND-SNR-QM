@@ -6,6 +6,7 @@ and get a frame whose pivots land exactly where the test expects.
 """
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 
@@ -166,4 +167,38 @@ def impulse_base_impulse(
         price += sign * 0.2
 
     index = pd.date_range("2026-01-05", periods=len(rows), freq="15min", tz="UTC")
+    return pd.DataFrame(rows, index=index)
+
+
+def drop_base_drop_from_chart() -> pd.DataFrame:
+    """The BTCUSD M5 Drop-Base-Drop the first detector missed.
+
+    Reconstructed from a live chart (20 Sep 2026): a stepped decline into a
+    two-candle pause around 80880-80935, then the large drop to ~80545. The
+    original thresholds required every base candle to be near-bodyless and
+    each leg to exceed a full ATR, so this obvious structure produced no zone
+    at all. Kept as a regression test.
+    """
+    rows = []
+
+    def candle(open_, high, low, close):
+        rows.append({"open": open_, "high": high, "low": low,
+                     "close": close, "volume": 100.0})
+
+    price = 81150.0
+    rng = np.random.default_rng(3)
+    for _ in range(24):                          # choppy decline, sets the ATR
+        nxt = price - rng.uniform(-25, 55)
+        candle(price, max(price, nxt) + 18, min(price, nxt) - 18, nxt)
+        price = nxt
+
+    candle(80995, 81005, 80900, 80910)           # drop into the base
+    candle(80910, 80935, 80881, 80898)           # pause 1
+    candle(80898, 80930, 80878, 80886)           # pause 2
+    candle(80886, 80900, 80540, 80548)           # the drop out
+
+    for _ in range(10):                          # consolidation afterwards
+        candle(80500, 80560, 80340, 80450 + rng.uniform(-90, 90))
+
+    index = pd.date_range("2026-09-20 04:20", periods=len(rows), freq="5min", tz="UTC")
     return pd.DataFrame(rows, index=index)

@@ -2,7 +2,7 @@ import pandas as pd
 
 from bot.strategy.snd import find_zones, nearest_opposing_zone, nearest_zone, unbroken
 from bot.strategy.types import Direction, Zone, ZoneKind
-from tests.factories import impulse_base_impulse
+from tests.factories import drop_base_drop_from_chart, impulse_base_impulse
 
 NOW = pd.Timestamp("2026-01-05", tz="UTC").to_pydatetime()
 
@@ -94,10 +94,69 @@ def test_buy_targets_supply_above():
     assert target is not None and target.bottom == 120
 
 
-def test_broken_zones_are_never_targeted():
+def test_an_unbroken_zone_is_preferred_over_a_mitigated_one():
+    zones = [
+        zone(ZoneKind.DEMAND, 90, 95, broken=True),   # closer, but mitigated
+        zone(ZoneKind.DEMAND, 80, 85),                # further, still fresh
+    ]
+    target = nearest_opposing_zone(zones, Direction.SELL, 100.0)
+    assert target is not None and target.top == 85
+
+
+def test_a_mitigated_zone_is_used_when_nothing_fresh_exists():
+    """A stale level still beats having no target at all."""
     zones = [zone(ZoneKind.DEMAND, 80, 85, broken=True)]
-    assert nearest_opposing_zone(zones, Direction.SELL, 100.0) is None
+    target = nearest_opposing_zone(zones, Direction.SELL, 100.0)
+    assert target is not None and target.top == 85
+
+
+def test_mitigated_zones_can_be_excluded_explicitly():
+    zones = [zone(ZoneKind.DEMAND, 80, 85, broken=True)]
+    assert nearest_opposing_zone(
+        zones, Direction.SELL, 100.0, allow_mitigated=False
+    ) is None
+
+
+def test_the_search_covers_the_whole_history_not_just_nearby():
+    """A zone far down the loaded history is still found."""
+    zones = [zone(ZoneKind.DEMAND, 10, 15, base_index=0)]
+    target = nearest_opposing_zone(zones, Direction.SELL, 100.0)
+    assert target is not None and target.top == 15
 
 
 def test_no_opposing_zone_returns_none():
     assert nearest_opposing_zone([], Direction.SELL, 100.0) is None
+
+
+# -- regression: the structure a human reads instantly -----------------------
+
+def test_the_live_chart_drop_base_drop_is_detected():
+    """A textbook DBD from a real BTCUSD M5 chart must produce a supply zone.
+
+    The original thresholds found nothing here, which is why the bot ran for
+    43 minutes finding valid QM setups it could never assign a target to.
+    """
+    zones = find_zones(drop_base_drop_from_chart(), "M5")
+    supply = [
+        z for z in zones
+        if z.kind is ZoneKind.SUPPLY and 80_850 < z.bottom < 80_950
+    ]
+    assert supply, f"expected a supply zone near 80880-80935, got {zones}"
+
+
+def test_that_zone_is_fresh_and_usable_as_a_target():
+    zones = find_zones(drop_base_drop_from_chart(), "M5")
+    supply = [
+        z for z in zones
+        if z.kind is ZoneKind.SUPPLY and 80_850 < z.bottom < 80_950
+    ]
+    assert any(not z.broken for z in supply)
+
+
+def test_a_pause_candle_with_a_body_still_counts_as_a_base():
+    """Base candles need to be a pause, not a doji."""
+    frame = drop_base_drop_from_chart()
+    base = frame.iloc[25:27]
+    bodies = (base["close"] - base["open"]).abs()
+    assert (bodies > 0).all()          # these have real bodies
+    assert find_zones(frame, "M5")     # and still form a zone

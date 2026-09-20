@@ -42,10 +42,18 @@ Modules: `bot/strategy/trend.py`, `bot/strategy/snd.py` (H4 zone map).
 Candle classification is ATR-relative, so the same thresholds work on XAUUSD
 and BTCUSD without retuning:
 
-- **impulsive** — body ≥ 1.0 × ATR(14) *and* the body fills ≥ 50% of the
+- **impulsive** — body ≥ 0.6 × ATR(14) *and* the body fills ≥ 50% of the
   candle's range (a wide range that is mostly wick is indecision, not an
   impulse);
-- **basing** — body ≤ 50% of the range *and* the whole range ≤ one ATR.
+- **basing** — anything *not* impulsive whose range stays within 1.5 × ATR. A
+  base is a pause, so the test is the absence of a strong move rather than a
+  strict doji shape.
+
+> Both thresholds were loosened after live BTCUSD data showed the originals
+> (1.0 × ATR, and a near-bodyless base) mapping almost no zones at all — around
+> 0.5 per 500 bars, of which 0.2 unbroken. Textbook Drop-Base-Drop structures
+> visible on the chart were being missed. The current values map roughly 21 per
+> 500 bars, ~5 unbroken.
 
 A zone is `impulse → 1..5 base candles → impulse in the same direction`. Its
 boundaries follow the usual proximal/distal construction, where the *proximal*
@@ -149,13 +157,15 @@ Module: `bot/strategy/snr.py`.
 | Rule | Implementation |
 | --- | --- |
 | **Stop loss** | Beyond the head's extreme wick, padded by `1.5 × spread` (min. one tick). `risk.stop_loss_for()` |
-| **Take profit** | The **near edge** of the nearest opposing M15 SND zone — the edge price reaches first. `risk.take_profit_for()` |
+| **Take profit** | The **near edge** of the nearest opposing SND zone — M15 first, then M5, searching the whole loaded history. Unbroken zones are preferred; mitigated ones are used rather than giving up. `risk.take_profit_for()` |
+| **Take profit fallback** | When no zone yields a usable target — none found, wrong side of entry, or too close to clear the R:R floor — the target becomes a fixed **1:2** multiple of the stop distance. A valid QM setup is never blocked for want of a zone. `risk.fallback_take_profit()` |
 | **Invalidation** | A candle **closing** beyond the head kills the setup; the pending order is cancelled. `quasimodo.is_invalidated()` |
 | **Sizing** | `RISK_PERCENT` of balance over the stop distance, snapped to the broker volume step. `risk.position_volume()` |
-| **R:R floor** | Setups below 1.0 R:R are rejected. `risk.MIN_RISK_REWARD` |
+| **R:R floor** | A zone target below 1.0 R:R is discarded in favour of the fixed 1:2 fallback, not rejected outright. `risk.MIN_RISK_REWARD` |
 
 Exit at the **first** opposing zone — this is a scalp, the trade is not held
-for a second target.
+for a second target. The report and the Telegram message both name the source
+of the target (`zone` or `fixed 1:2`), so it is always visible which applied.
 
 ---
 
@@ -237,7 +247,8 @@ M5 Quasimodo found (≤36 bars old)?    no ──► stand down
 QM invalidated (close beyond head)?  yes ──► stand down
    │
    ▼
-Risk: SL / TP / size / R:R ≥ 1.0      fail ──► stand down
+Risk: SL, then TP (zone, else 1:2)
+      sizing above broker minimum?    fail ──► stand down
    │
    ▼
 Price still outside the zone?         no ──► WAITING_RETEST (no instant fill)

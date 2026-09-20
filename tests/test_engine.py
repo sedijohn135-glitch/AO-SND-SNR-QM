@@ -126,12 +126,22 @@ def test_no_qm_reports_none():
     assert report.setup is None
 
 
-def test_missing_take_profit_zone_blocks_the_setup():
+def test_missing_take_profit_zone_no_longer_blocks_the_setup():
+    """A valid QM setup must never be abandoned for want of an SND zone."""
     frames = aligned_frames()
     frames.m15 = noise(freq="15min")          # no mappable SND zones
     report = engine().analyse(frames, spread=0.30, balance=10_000.0)
-    assert report.setup is None
-    assert report.setup_status is SetupStatus.BLOCKED
+    assert report.setup_status is SetupStatus.VALID
+    assert report.setup is not None
+    assert report.setup.target_source.startswith("fixed")
+    assert report.setup.risk_reward == pytest.approx(2.0)
+
+
+def test_the_fallback_target_is_reported():
+    frames = aligned_frames()
+    frames.m15 = noise(freq="15min")
+    report = engine().analyse(frames, spread=0.30, balance=10_000.0)
+    assert any("take profit set at" in note for note in report.notes)
 
 
 def test_insufficient_history_is_reported_not_raised():
