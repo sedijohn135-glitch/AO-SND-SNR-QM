@@ -211,6 +211,9 @@ class TradeSetup:
     take_profit: float
     volume: int
     pattern: QMPattern
+    #: Broker lot size, so ``volume`` -- which is Open API units, i.e.
+    #: hundredths of a base unit -- can also be reported in lots.
+    lot_size: int = 0
     target_zone: Zone | None = None
     #: Where the take profit came from -- an SND zone, or the fixed-R fallback.
     target_source: str = "zone"
@@ -219,6 +222,11 @@ class TradeSetup:
     #: True when this trades against the H4 bias rather than with it.
     counter_trend: bool = False
     confluence: list[Level] = field(default_factory=list)
+
+    @property
+    def volume_lots(self) -> float:
+        """``volume`` expressed in lots; 0.0 when the lot size is unknown."""
+        return self.volume / self.lot_size if self.lot_size else 0.0
 
     @property
     def risk_distance(self) -> float:

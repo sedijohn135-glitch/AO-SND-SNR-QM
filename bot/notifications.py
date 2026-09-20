@@ -113,6 +113,15 @@ class TradeNotifier:
         """Record why we are about to cancel, so the message can say so."""
         self._cancel_reasons[symbol_id] = reason
 
+    def clear_cancel_reason(self, symbol_id: int) -> None:
+        """Disarm a reason whose cancellation never went through.
+
+        The reason has to be recorded before the request is sent, because the
+        execution event can arrive while it is in flight. If the request then
+        fails, leaving it armed would mislabel whatever cancels next.
+        """
+        self._cancel_reasons.pop(symbol_id, None)
+
     def _take_cancel_reason(self, symbol_id: int) -> str | None:
         return self._cancel_reasons.pop(symbol_id, None)
 

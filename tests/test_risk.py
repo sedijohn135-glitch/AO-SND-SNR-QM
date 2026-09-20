@@ -377,3 +377,18 @@ def test_used_margin_reduces_what_is_available():
 def test_free_margin_never_goes_negative():
     from bot.execution import AccountSnapshot
     assert AccountSnapshot(balance=100.0, used_margin=250.0).free_margin == 0.0
+
+
+def test_build_setup_carries_the_lot_size_so_size_can_be_reported_in_lots():
+    setup = build_setup(
+        pattern=sell_pattern(),
+        symbol=GOLD,
+        spread=0.30,
+        balance=10_000.0,
+        risk_percent=1.0,
+        target_zone=demand_zone(),
+    )
+    assert setup.lot_size == GOLD.lot_size
+    assert setup.volume == 900
+    assert setup.volume_lots == pytest.approx(0.09)
+    assert setup.volume_lots == pytest.approx(GOLD.volume_to_lots(setup.volume))

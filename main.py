@@ -134,7 +134,56 @@ class TradingBot:
         await self._client.start()
         self._running = True
         await self._announce_start()
+        await self._clear_orphaned_orders()
         await self._run_loop()
+
+    async def _clear_orphaned_orders(self) -> None:
+        """Cancel resting orders left behind by a previous process.
+
+        HAPI 6 invalidation is driven by ``_active_patterns``, which lives in
+        memory only. A restart empties it, so the bot can no longer tell which
+        formation a resting order belongs to, nor cancel it when a candle
+        closes beyond the head. With MAX_PENDING_ORDERS at 1 that order then
+        blocks every new setup until its broker-side expiry runs out -- hours
+        of silence after each deploy.
+
+        Clearing them on boot is the cheaper side: a setup that is still valid
+        is re-placed on the next tick with fresh levels, and a stale one is
+        gone. Only the instruments this bot trades are touched.
+        """
+        if not self._config.enable_trading or not self._config.cancel_orphaned_orders:
+            return
+
+        try:
+            snapshot = await self._broker.snapshot()
+        except Exception:
+            log.exception("Startup cleanup: could not read the account snapshot")
+            return
+
+        for name in sorted({self._config.symbol_weekday, self._config.symbol_weekend}):
+            try:
+                symbol = await self._resolver.get(name)
+                if not snapshot.orders_for(symbol.symbol_id):
+                    continue
+                self._trade_notifier.note_cancel_reason(
+                    symbol.symbol_id,
+                    "Bot restarted - resting orders cleared so the new process "
+                    "starts from a known state",
+                )
+                try:
+                    cancelled = await self._broker.cancel_pending_for_symbol(
+                        symbol.symbol_id
+                    )
+                except Exception:
+                    self._trade_notifier.clear_cancel_reason(symbol.symbol_id)
+                    raise
+            except Exception:
+                log.exception("Startup cleanup: could not clear orders on %s", name)
+                continue
+            log.info(
+                "Startup cleanup: cancelled %d orphaned order(s) on %s",
+                cancelled, name,
+            )
 
     async def _announce_start(self) -> None:
         """One message on startup, so silence later is unambiguous."""

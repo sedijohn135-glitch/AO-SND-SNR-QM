@@ -26,7 +26,7 @@ def make_pattern():
     )
 
 
-def make_setup(confluence=()):
+def make_setup(confluence=(), lot_size=0):
     return TradeSetup(
         direction=Direction.SELL,
         symbol="XAUUSD",
@@ -37,6 +37,7 @@ def make_setup(confluence=()):
         take_profit=1965.0,
         volume=900,
         pattern=make_pattern(),
+        lot_size=lot_size,
         confluence=list(confluence),
     )
 
@@ -116,3 +117,45 @@ def test_a_counter_trend_setup_is_marked_on_the_direction_line():
     )
     text = render(report)
     assert "SELL LIMIT  (counter-trend)" in text
+
+
+def test_volume_is_reported_in_lots_not_open_api_units():
+    """A 900-unit order on XAUUSD is 0.09 lots, not 900 of anything.
+
+    Open API volume counts hundredths of a base unit, so printing it raw
+    overstates the position by the lot size -- the console once showed "5
+    units" for a 0.05 lot BTCUSD order.
+    """
+    report = AnalysisReport(
+        symbol="XAUUSD",
+        generated_at=NOW,
+        price_digits=2,
+        setup_status=SetupStatus.VALID,
+        setup=make_setup(lot_size=10000),
+    )
+    text = render(report)
+    assert "Volume      : 0.09 lots" in text
+    assert "900 units" not in text
+
+
+def test_volume_falls_back_to_units_when_the_lot_size_is_unknown():
+    report = AnalysisReport(
+        symbol="XAUUSD",
+        generated_at=NOW,
+        price_digits=2,
+        setup_status=SetupStatus.VALID,
+        setup=make_setup(),
+    )
+    assert "Volume      : 900 units" in render(report)
+
+
+def test_a_very_large_lot_size_still_renders_a_non_zero_size():
+    """Two decimals would print 0.00 lots; the size must stay legible."""
+    report = AnalysisReport(
+        symbol="XAUUSD",
+        generated_at=NOW,
+        price_digits=2,
+        setup_status=SetupStatus.VALID,
+        setup=make_setup(lot_size=1_000_000),
+    )
+    assert "Volume      : 0.0009 lots" in render(report)

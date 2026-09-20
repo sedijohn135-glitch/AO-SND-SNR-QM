@@ -201,6 +201,14 @@ class StrategyEngine:
                 f"COUNTER-TREND: looking for {direction.value} against a "
                 f"{bias.value} H4. Higher risk by design."
             )
+        elif self._allow_counter_trend:
+            # Saying "only BUY allowed" would contradict the flag: a SELL is
+            # still reachable, just not until this pass comes up empty.
+            report.notes.append(
+                f"H4 {bias.value} -> {direction.value} preferred. "
+                f"ALLOW_COUNTER_TREND=true, so a {direction.opposite.value} "
+                f"scalp is tried as a fallback if this pass finds nothing."
+            )
         else:
             report.notes.append(
                 f"H4 {bias.value} -> only {direction.value} setups allowed."

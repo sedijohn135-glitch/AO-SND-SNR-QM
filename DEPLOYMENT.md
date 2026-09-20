@@ -166,9 +166,20 @@ the window is the fallback.
 | `MAX_OPEN_POSITIONS` | `1` | Per instrument |
 | `MAX_PENDING_ORDERS` | `1` | Per instrument |
 | `ORDER_EXPIRY_MINUTES` | `240` | Pending order lifetime; `0` = good till cancel |
+| `CANCEL_ORPHANED_ORDERS_ON_BOOT` | `true` | Cancel resting orders on startup; see below |
 
-Sizing assumes a USD-quoted instrument on a USD-denominated account — true for
-both XAUUSD and BTCUSD.
+Sizing converts the risk budget from the account's deposit currency into the
+instrument's quote currency at the broker's live rate, so a EUR account trading
+USD-quoted XAUUSD and BTCUSD is sized correctly.
+
+The bot tracks the Quasimodo behind each pending order in memory only. A
+restart — every Railway deploy — empties that, so it can neither invalidate a
+resting order when price closes beyond the head nor replace it, and with
+`MAX_PENDING_ORDERS=1` that order blocks every new setup until it expires.
+`CANCEL_ORPHANED_ORDERS_ON_BOOT` clears them at startup instead; a setup that
+is still valid is re-placed on the next tick. Only `SYMBOL_WEEKDAY` and
+`SYMBOL_WEEKEND` are touched. Set it to `false` if you place orders on those
+instruments by hand and want them left alone.
 
 ### Strategy
 

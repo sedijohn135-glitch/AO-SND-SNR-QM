@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from bot.strategy.types import AnalysisReport, SetupStatus, format_price
+from bot.strategy.types import AnalysisReport, SetupStatus, TradeSetup, format_price
 
 _STATUS_TEXT = {
     SetupStatus.VALID: "VALID - order may be placed",
@@ -16,6 +16,22 @@ _STATUS_TEXT = {
     SetupStatus.NONE: "NONE - no Quasimodo formation",
     SetupStatus.BLOCKED: "BLOCKED - pattern found but a rule vetoed it",
 }
+
+
+def _volume_text(setup: TradeSetup) -> str:
+    """Size in lots.
+
+    ``setup.volume`` is in Open API units -- hundredths of a base unit -- so
+    printing it raw reads as a position a hundred times the real one: a 0.05
+    lot order shows as "5". Telegram already reports lots; this brings the
+    console report in line.
+    """
+    if not setup.lot_size:
+        return f"{setup.volume} units"
+    lots = setup.volume_lots
+    # Two places covers every instrument the bot trades; the wider format is
+    # there so an unusually large lot size cannot render as "0.00 lots".
+    return f"{lots:.2f} lots" if lots >= 0.01 else f"{lots:.4f} lots"
 
 
 def render(report: AnalysisReport) -> str:
@@ -82,7 +98,7 @@ def render(report: AnalysisReport) -> str:
             f"  ({setup.target_source})"
         )
         lines.append(f"   Risk/Reward : {setup.risk_reward:.2f}")
-        lines.append(f"   Volume      : {setup.volume} units")
+        lines.append(f"   Volume      : {_volume_text(setup)}")
         if setup.confluence:
             levels = ", ".join(format_price(l.price, digits) for l in setup.confluence)
             lines.append(f"   SNR confluence: {levels} (maximum probability)")
