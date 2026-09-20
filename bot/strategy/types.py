@@ -216,6 +216,8 @@ class TradeSetup:
     target_source: str = "zone"
     #: True when the margin cap reduced the size below what risk alone wanted.
     scaled_for_margin: bool = False
+    #: True when this trades against the H4 bias rather than with it.
+    counter_trend: bool = False
     confluence: list[Level] = field(default_factory=list)
 
     @property
@@ -247,4 +249,6 @@ class AnalysisReport:
     setup: TradeSetup | None = None
     pattern: QMPattern | None = None
     price_digits: int = 2
+    #: True when this pass looked against the H4 bias.
+    counter_trend: bool = False
     notes: list[str] = field(default_factory=list)

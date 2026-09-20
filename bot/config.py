@@ -114,6 +114,8 @@ class Config:
     #: HAPI 1 also asks that price be AT the H4 zone the bias wants.
     require_h4_zone_proximity: bool = True
     h4_zone_proximity_atr: float = 1.5
+    #: Allow scalps against the H4 bias when AO divergence justifies them.
+    allow_counter_trend: bool = False
 
     # --- news filter -------------------------------------------------------
     news_filter_enabled: bool = True
@@ -158,6 +160,7 @@ class Config:
             "timezone": str(self.timezone),
             "session": self.session.describe() if self.session else None,
             "require_h4_zone_proximity": self.require_h4_zone_proximity,
+            "allow_counter_trend": self.allow_counter_trend,
             "news_filter_enabled": self.news_filter_enabled,
             "news_currencies": list(self.news_currencies),
             "news_min_impact": self.news_min_impact,
@@ -241,6 +244,7 @@ def load_config() -> Config:
         enable_trading=_bool("ENABLE_TRADING", False),
         require_h4_zone_proximity=_bool("REQUIRE_H4_ZONE_PROXIMITY", True),
         h4_zone_proximity_atr=_float("H4_ZONE_PROXIMITY_ATR", 1.5),
+        allow_counter_trend=_bool("ALLOW_COUNTER_TREND", False),
         news_filter_enabled=_bool("NEWS_FILTER_ENABLED", True),
         news_feed_url=_raw("NEWS_FEED_URL", DEFAULT_FEED_URL) or DEFAULT_FEED_URL,
         news_currencies=news_currencies,

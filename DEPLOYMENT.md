@@ -175,11 +175,30 @@ both XAUUSD and BTCUSD.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `REQUIRE_H4_ZONE_PROXIMITY` | `true` | HAPI 1: price must be at the H4 zone the bias wants |
+| `ALLOW_COUNTER_TREND` | `false` | Allow scalps against the H4 bias (see below) |
 | `H4_ZONE_PROXIMITY_ATR` | `1.5` | How near "at the zone" means, in H4 ATRs |
 | `LOOP_INTERVAL_SECONDS` | `60` | Seconds between analysis passes |
 | `BARS_H4` | `400` | H4 candles fetched |
 | `BARS_M15` | `500` | M15 candles fetched |
 | `BARS_M5` | `500` | M5 candles fetched |
+
+### Counter-trend scalps
+
+HAPI 1 normally permits only trades aligned with the H4 bias. With
+`ALLOW_COUNTER_TREND=true` the bot also looks for the opposite direction — a
+SELL under a bullish H4, or a BUY under a bearish one.
+
+Two safeguards remain in place:
+
+- **AO divergence becomes mandatory.** Trading with the trend, divergence is a
+  warning only; trading against it, the divergence is the entire justification,
+  so a counter-trend setup without it is rejected.
+- **A ranging H4 still blocks both directions.** Counter-trend trading needs a
+  trend to trade against.
+
+The trend-aligned direction is always evaluated first; the counter-trend pass
+only runs if it produced nothing. Such trades are marked `(Counter-Trend)` in
+the Telegram alert and `[COUNTER-TREND PASS]` in the report.
 
 ### News filter
 

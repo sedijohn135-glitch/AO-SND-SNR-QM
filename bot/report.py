@@ -25,7 +25,8 @@ def render(report: AnalysisReport) -> str:
         f" {report.symbol} | {report.generated_at:%Y-%m-%d %H:%M:%S} UTC",
         "=" * 68,
         "",
-        f"1. H4 TREND        : {report.h4_trend.value}",
+        f"1. H4 TREND        : {report.h4_trend.value}"
+        + ("  [COUNTER-TREND PASS]" if report.counter_trend else ""),
     ]
     if report.h4_notes:
         lines.append(f"   {report.h4_notes}")
@@ -66,7 +67,10 @@ def render(report: AnalysisReport) -> str:
         near, far = sorted((setup.zone_near, setup.zone_far))
         digits = report.price_digits
         lines.append("5. LEVELS")
-        lines.append(f"   Direction   : {setup.direction.value} LIMIT")
+        lines.append(
+            f"   Direction   : {setup.direction.value} LIMIT"
+            + ("  (counter-trend)" if setup.counter_trend else "")
+        )
         lines.append(f"   Entry       : {format_price(setup.entry, digits)}")
         lines.append(
             f"   Entry zone  : {format_price(near, digits)} -> "
