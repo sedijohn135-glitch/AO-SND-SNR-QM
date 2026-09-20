@@ -277,3 +277,25 @@ def test_counter_trend_still_respects_the_structure_gate():
     frames.m5 = candles_from_path([100.0 + i * 0.01 for i in range(80)])
     report = counter_engine(True).analyse(frames, spread=0.30, balance=10_000.0)
     assert report.setup is None
+
+
+def test_the_aligned_note_claims_exclusivity_only_when_it_is_true():
+    """With the flag off, "only BUY setups allowed" is accurate."""
+    report = counter_engine(False).analyse(
+        counter_trend_frames(), spread=0.30, balance=10_000.0
+    )
+    assert any("only BUY setups allowed" in note for note in report.notes)
+
+
+def test_the_aligned_note_mentions_the_counter_trend_fallback_when_enabled():
+    """With the flag on it must not claim only BUYs are allowed -- a SELL is
+    exactly what the counter pass goes looking for."""
+    report = counter_engine(True).analyse(
+        counter_trend_frames(momentum_confirms_path()),
+        spread=0.30, balance=10_000.0,
+    )
+    aligned = [n for n in report.notes if n.startswith("H4 BULLISH ->")]
+    assert aligned, report.notes
+    assert "only BUY setups allowed" not in aligned[0]
+    assert "SELL" in aligned[0]
+    assert "fallback" in aligned[0]

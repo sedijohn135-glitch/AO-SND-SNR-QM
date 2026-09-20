@@ -111,6 +111,10 @@ class Config:
     max_pending_orders: int = 1
     order_expiry_minutes: int = 240
     enable_trading: bool = False
+    #: Cancel resting orders left by a previous process on startup. The bot
+    #: tracks the QM behind each order in memory only, so after a restart it
+    #: can neither invalidate nor replace them.
+    cancel_orphaned_orders: bool = True
     #: HAPI 1 also asks that price be AT the H4 zone the bias wants.
     require_h4_zone_proximity: bool = True
     h4_zone_proximity_atr: float = 1.5
@@ -175,6 +179,7 @@ class Config:
             "risk_percent": self.risk_percent,
             "fixed_volume_lots": self.fixed_volume_lots,
             "enable_trading": self.enable_trading,
+            "cancel_orphaned_orders": self.cancel_orphaned_orders,
         }
 
 
@@ -242,6 +247,7 @@ def load_config() -> Config:
         max_pending_orders=_int("MAX_PENDING_ORDERS", 1),
         order_expiry_minutes=_int("ORDER_EXPIRY_MINUTES", 240),
         enable_trading=_bool("ENABLE_TRADING", False),
+        cancel_orphaned_orders=_bool("CANCEL_ORPHANED_ORDERS_ON_BOOT", True),
         require_h4_zone_proximity=_bool("REQUIRE_H4_ZONE_PROXIMITY", True),
         h4_zone_proximity_atr=_float("H4_ZONE_PROXIMITY_ATR", 1.5),
         allow_counter_trend=_bool("ALLOW_COUNTER_TREND", False),

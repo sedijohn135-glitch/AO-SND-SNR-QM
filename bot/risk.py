@@ -270,6 +270,7 @@ def build_setup(
         take_profit=take_profit,
         volume=volume,
         pattern=pattern,
+        lot_size=symbol.lot_size,
         target_zone=target_zone if target_source == "zone" else None,
         target_source=target_source,
         scaled_for_margin=scaled_for_margin,
